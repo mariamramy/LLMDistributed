@@ -1,4 +1,4 @@
-from workers.gpu_worker import GPUWorker
+from workers.gpu_workers import GPUWorker
 from lb.load_balancer import LoadBalancer
 from master.scheduler import Scheduler
 from client.load_generator import run_load_test

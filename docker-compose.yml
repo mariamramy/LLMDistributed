@@ -1,0 +1,103 @@
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+
+services:
+  main:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import main as m
+        print("main.py container ready")
+        time.sleep(10**9)
+
+  client:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import client.load_generator as m
+        print("client/load_generator.py container ready")
+        time.sleep(10**9)
+
+  scheduler:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import master.scheduler as m
+        print("master/scheduler.py container ready")
+        time.sleep(10**9)
+
+  load_balancer:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import lb.load_balancer as m
+        print("lb/load_balancer.py container ready")
+        time.sleep(10**9)
+
+  llm:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import llm.inference as m
+        print("llm/inference.py container ready")
+        time.sleep(10**9)
+
+  rag:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import rag.retriever as m
+        print("rag/retriever.py container ready")
+        time.sleep(10**9)
+
+  common:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import common.models as m
+        print("common/models.py container ready")
+        time.sleep(10**9)
+
+  worker:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import os
+        import time
+        import workers.gpu_workers as m
+        print(f"workers/gpu_workers.py container ready: {os.getenv('HOSTNAME')}")
+        time.sleep(10**9)
