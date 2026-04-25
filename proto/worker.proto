@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package worker;
+
+service WorkerService {
+  rpc Process (QueryRequest) returns (QueryResponse);
+  rpc HealthCheck (HealthRequest) returns (HealthResponse);
+}
+
+message QueryRequest {
+  int32 id = 1;
+  string query = 2;
+}
+
+message QueryResponse {
+  int32 id = 1;
+  string result = 2;
+  float latency = 3;
+  string worker_id = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  int32 active_requests = 2;
+  float avg_latency_ms = 3;
+}

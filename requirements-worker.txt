@@ -1,0 +1,7 @@
+grpcio==1.64.0
+grpcio-tools==1.64.0
+openai==1.35.0
+httpx<0.28
+chromadb==0.5.0
+numpy<2.0
+python-dotenv==1.0.1

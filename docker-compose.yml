@@ -1,0 +1,100 @@
+x-worker-image: &worker-image llmdistributed-worker:latest
+
+x-worker-env: &worker-env
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+  MOCK_LLM: ${MOCK_LLM:-false}
+  EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-hash}
+  CHROMA_HOST: chromadb
+  CHROMA_PORT: 8000
+
+services:
+  lb:
+    image: llmdistributed-lb:latest
+    build:
+      context: .
+      dockerfile: lb/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      WORKER_HOSTS: ${WORKER_HOSTS:-worker1:50051,worker2:50052,worker3:50053}
+      LB_STRATEGY: ${LB_STRATEGY:-least_conn}
+    depends_on:
+      - worker1
+      - worker2
+      - worker3
+
+  worker1:
+    image: *worker-image
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-1
+      GRPC_PORT: 50051
+    depends_on:
+      - chromadb
+
+  worker2:
+    image: *worker-image
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-2
+      GRPC_PORT: 50052
+    depends_on:
+      - chromadb
+
+  worker3:
+    image: *worker-image
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-3
+      GRPC_PORT: 50053
+    depends_on:
+      - chromadb
+
+  chromadb:
+    image: chromadb/chroma:0.5.0
+    ports:
+      - "8001:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - lb
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/dashboard.json:/var/lib/grafana/dashboards/distributed-llm.json:ro
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  locust:
+    image: locustio/locust:2.29.0
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./client:/mnt/locust:ro
+      - ./results:/mnt/results
+    command: -f /mnt/locust/locustfile.py --host http://lb:8000
+    depends_on:
+      - lb
+
+volumes:
+  chroma_data:

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Distributed LLM
+    orgId: 1
+    folder: Distributed LLM
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
