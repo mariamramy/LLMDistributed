@@ -4,10 +4,11 @@ from aiohttp import web
 import argparse
 import logging
 import time
-import threading
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List
+
+from lb.node import Node                          
+from lb.strategies import BaseStrategy, RoundRobinStrategy, STRATEGIES  
+from lb.health_monitor import HealthMonitor  
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,33 +16,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("load_balancer")
 
-
-# defining a node 
-@dataclass
-class Node:
-    node_id: str
-    host: str 
-    port: int # port the node listens on
-    healthy: bool = True # alive or not
-    active_connections: int = 0 # how many requests its currently handling
-    load: float = 0.0 # a score from 0.0-1.0 reported from node used in load aware
-    total_requests: int = 0 # for monitoring
-
-    #properties auto-build the HTTP addresses
-    @property
-    def url(self) -> str:
-        return f"http://{self.host}:{self.port}"
-
-    @property
-    def health_url(self) -> str:
-        return f"{self.url}/health"
-
-    @property
-    def request_url(self) -> str:
-        return f"{self.url}/request"
-
-
-
+#Load Balancer Class
 class LoadBalancer:
     def __init__(self, workers):
         self.workers = workers
