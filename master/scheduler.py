@@ -1,8 +1,13 @@
-class Scheduler:
-    def __init__(self, load_balancer):
-        self.lb = load_balancer
+import asyncio
+import aiohttp
+from aiohttp import web
+import argparse
+import logging
+import time
+import uuid
+from typing import Dict
 
-    def handle_request(self, request):
-        print(f"[Scheduler] Dispatching request {request.id}")
-        response = self.lb.dispatch(request)
-        return response
+from master.models import Task, TaskStatus, DISPATCH_INTERVAL, HEARTBEAT_INTERVAL, MAX_TASK_RETRIES
+from master.work_registry import WorkerRegistry, TaskStore
+
+log = logging.getLogger("master_scheduler")
