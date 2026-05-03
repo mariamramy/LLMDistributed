@@ -21,6 +21,66 @@ x-app: &app
     - llmnet
 
 services:
+  main:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import main as m
+        print("main.py container ready")
+        time.sleep(10**9)
+
+  client:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import client.load_generator as m
+        print("client/load_generator.py container ready")
+        time.sleep(10**9)
+
+  scheduler:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import master.scheduler as m
+        print("master/scheduler.py container ready")
+        time.sleep(10**9)
+
+  load_balancer:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import lb.load_balancer as m
+        print("lb/load_balancer.py container ready")
+        time.sleep(10**9)
+
+  common:
+    <<: *app
+    command:
+      - python
+      - -u
+      - -c
+      - |
+        import time
+        import common.models as m
+        print("common/models.py container ready")
+        time.sleep(10**9)
+
   chromadb:
     image: chromadb/chroma:1.5.3
     restart: unless-stopped
