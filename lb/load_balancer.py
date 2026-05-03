@@ -61,4 +61,44 @@ class LoadBalancer:
          node.total_requests += 1
          self._total_requests += 1
          start = time.perf_counter()
-         
+
+#forwards the payload to the selected node. It first checks if a node is available using the strategy, and if not, it returns a 503 error. If a node is selected, it increments the active connection count and total request count for that node and the load balancer. It then forwards the request to the selected node using an aiohttp client session, measuring the latency and logging it. If the request fails, it marks the node as unhealthy and tries one retry on a different node before returning an error response. Finally, it decrements the active connection count for the node.
+#  asks the strategy to pick a node then increments the active connection count and total request count for that node and the load balancer. It then forwards the request to the selected node using an aiohttp client session, measuring the latency and logging it. 
+# If the request fails, it marks the node as unhealthy and tries one retry on a different node before returning an error response. Finally, it decrements the active connection count for the node.
+async def _forward(self, session: aiohttp.ClientSession, payload: dict) -> web.Response:
+    node = self.strategy.select(self.nodes)
+
+    if node is None:
+        self._total_failures += 1
+        return web.json_response({"error": "Service unavailable — no healthy nodes"}, status=503)
+
+    node.active_connections += 1
+    node.total_requests += 1
+    self._total_requests += 1
+    start = time.perf_counter()
+
+    try:
+        async with session.post(
+            node.request_url,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s),
+        ) as resp:
+            data = await resp.json()
+            elapsed = (time.perf_counter() - start) * 1000
+            log.info("→ node=%s latency=%.1fms status=%d", node.node_id, elapsed, resp.status)
+            return web.json_response(data, status=resp.status)
+
+    except Exception as exc:
+        node.healthy = False  # mark it bad so health monitor re-checks it
+        self._total_failures += 1
+
+        # one retry on a different node
+        retry_node = self.strategy.select(self.nodes)
+        if retry_node and retry_node.node_id != node.node_id:
+            return await self._forward_to(session, retry_node, payload)
+
+        return web.json_response({"error": f"Node {node.node_id} failed: {exc}"}, status=502)
+
+    finally:
+        node.active_connections = max(0, node.active_connections - 1)
+
