@@ -1,0 +1,386 @@
+{
+  "info": {
+    "_postman_id": "4c04fc40-390c-43a7-8b7e-7968fec91f69",
+    "name": "LLMDistributed Worker/RAG/LLM API",
+    "description": "Smoke tests for the worker-owned layer: ChromaDB health, worker health/metrics, RAG task execution, no-RAG task execution, and validation errors.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "ChromaDB",
+      "item": [
+        {
+          "name": "Heartbeat",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{chroma_base_url}}/api/v2/heartbeat",
+              "host": ["{{chroma_base_url}}"],
+              "path": ["api", "v2", "heartbeat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('ChromaDB heartbeat returns 200', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker 1",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{worker_1_base_url}}/health",
+              "host": ["{{worker_1_base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 1 is ready', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('Worker 1 reports RAG readiness', function () {",
+                  "  pm.expect(body.worker_id).to.eql('worker-1');",
+                  "  pm.expect(body.rag_ready).to.eql(true);",
+                  "  pm.expect(body.chunk_count).to.be.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{worker_1_base_url}}/metrics",
+              "host": ["{{worker_1_base_url}}"],
+              "path": ["metrics"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 1 metrics returns counters', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.worker_id).to.eql('worker-1');",
+                  "  pm.expect(body).to.have.property('active_tasks');",
+                  "  pm.expect(body).to.have.property('total_tasks');",
+                  "  pm.expect(body).to.have.property('avg_latency_ms');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Task With RAG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"postman-rag-{{$timestamp}}\",\n  \"request_id\": \"postman-request-rag\",\n  \"prompt\": \"{{sample_prompt}}\",\n  \"use_rag\": true\n}"
+            },
+            "url": {
+              "raw": "{{worker_1_base_url}}/task",
+              "host": ["{{worker_1_base_url}}"],
+              "path": ["task"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('RAG task completes', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('RAG task returns answer and sources', function () {",
+                  "  pm.expect(body.status).to.eql('completed');",
+                  "  pm.expect(body.worker_id).to.eql('worker-1');",
+                  "  pm.expect(body.result).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.rag.used).to.eql(true);",
+                  "  pm.expect(body.rag.sources).to.be.an('array');",
+                  "  pm.expect(body.rag.sources.length).to.be.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Task Without RAG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"postman-no-rag-{{$timestamp}}\",\n  \"request_id\": \"postman-request-no-rag\",\n  \"prompt\": \"Give a short definition of a distributed system.\",\n  \"use_rag\": false\n}"
+            },
+            "url": {
+              "raw": "{{worker_1_base_url}}/task",
+              "host": ["{{worker_1_base_url}}"],
+              "path": ["task"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('No-RAG task completes', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('No-RAG task does not return sources', function () {",
+                  "  pm.expect(body.status).to.eql('completed');",
+                  "  pm.expect(body.rag.used).to.eql(false);",
+                  "  pm.expect(body.rag.sources).to.be.an('array').that.is.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Task Missing Prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"postman-invalid-{{$timestamp}}\",\n  \"use_rag\": true\n}"
+            },
+            "url": {
+              "raw": "{{worker_1_base_url}}/task",
+              "host": ["{{worker_1_base_url}}"],
+              "path": ["task"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Missing prompt is rejected', function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('Validation error shape is stable', function () {",
+                  "  pm.expect(body.status).to.eql('failed');",
+                  "  pm.expect(body.error.code).to.eql('missing_prompt');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker 2",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{worker_2_base_url}}/health",
+              "host": ["{{worker_2_base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 2 is ready', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().worker_id).to.eql('worker-2');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Task With RAG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"postman-worker2-{{$timestamp}}\",\n  \"prompt\": \"{{sample_prompt}}\",\n  \"use_rag\": true\n}"
+            },
+            "url": {
+              "raw": "{{worker_2_base_url}}/task",
+              "host": ["{{worker_2_base_url}}"],
+              "path": ["task"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 2 RAG task completes', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.worker_id).to.eql('worker-2');",
+                  "  pm.expect(body.rag.used).to.eql(true);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Worker 3",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{worker_3_base_url}}/health",
+              "host": ["{{worker_3_base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 3 is ready', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().worker_id).to.eql('worker-3');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Task With RAG",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": \"postman-worker3-{{$timestamp}}\",\n  \"prompt\": \"{{sample_prompt}}\",\n  \"use_rag\": true\n}"
+            },
+            "url": {
+              "raw": "{{worker_3_base_url}}/task",
+              "host": ["{{worker_3_base_url}}"],
+              "path": ["task"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Worker 3 RAG task completes', function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.worker_id).to.eql('worker-3');",
+                  "  pm.expect(body.rag.used).to.eql(true);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "chroma_base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "worker_1_base_url",
+      "value": "http://localhost:9101"
+    },
+    {
+      "key": "worker_2_base_url",
+      "value": "http://localhost:9102"
+    },
+    {
+      "key": "worker_3_base_url",
+      "value": "http://localhost:9103"
+    },
+    {
+      "key": "sample_prompt",
+      "value": "Explain replication in distributed systems using the textbook context."
+    }
+  ]
+}
