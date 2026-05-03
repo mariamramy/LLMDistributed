@@ -4,7 +4,11 @@ __pycache__/
 *.pyd
 .git/
 .gitignore
+.env
 .venv/
 venv/
 env/
 *.log
+.pytest_cache/
+chroma-data/
+pdfs/
