@@ -17,7 +17,7 @@ class HealthMonitor:
 
     async def _check_node(self, session: aiohttp.ClientSession, node: Node):
         try:
-            async with session.egt(
+            async with session.get(
                 node.health_url,
                 # if the node doesn't respond within 2 seconds, it raises an exception and falls into the except block 
                 timeout= aiohttp.ClientTimeout(total=self.timeout_s),
