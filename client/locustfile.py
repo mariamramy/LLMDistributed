@@ -1,6 +1,24 @@
 import random
+import os
 
 from locust import HttpUser, between, task
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+WAIT_MIN_SECONDS = _float_env("LOCUST_WAIT_MIN", 0.5)
+WAIT_MAX_SECONDS = _float_env("LOCUST_WAIT_MAX", 2.0)
+if WAIT_MIN_SECONDS > WAIT_MAX_SECONDS:
+    WAIT_MIN_SECONDS, WAIT_MAX_SECONDS = WAIT_MAX_SECONDS, WAIT_MIN_SECONDS
 
 
 SAMPLE_QUERIES = [
@@ -18,7 +36,7 @@ SAMPLE_QUERIES = [
 
 
 class LLMUser(HttpUser):
-    wait_time = between(0.5, 2.0)
+    wait_time = between(WAIT_MIN_SECONDS, WAIT_MAX_SECONDS)
 
     @task
     def send_query(self):
