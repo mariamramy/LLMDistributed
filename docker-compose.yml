@@ -3,6 +3,22 @@ x-app: &app
     context: .
     dockerfile: Dockerfile
   restart: unless-stopped
+  environment: &app-env
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-nano}
+    OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+    OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-300}
+    CHROMA_HOST: chromadb
+    CHROMA_PORT: "8000"
+    CHROMA_COLLECTION: ${CHROMA_COLLECTION:-distributed_systems_textbook}
+    RAG_TOP_K: ${RAG_TOP_K:-3}
+    RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-1000}
+    RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-150}
+    WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-4}
+    HEARTBEAT_INTERVAL_S: ${HEARTBEAT_INTERVAL_S:-5}
+    MASTER_URL: ${MASTER_URL:-}
+  networks:
+    - llmnet
 
 services:
   main:
@@ -53,30 +69,6 @@ services:
         print("lb/load_balancer.py container ready")
         time.sleep(10**9)
 
-  llm:
-    <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import llm.inference as m
-        print("llm/inference.py container ready")
-        time.sleep(10**9)
-
-  rag:
-    <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import rag.retriever as m
-        print("rag/retriever.py container ready")
-        time.sleep(10**9)
-
   common:
     <<: *app
     command:
@@ -89,15 +81,90 @@ services:
         print("common/models.py container ready")
         time.sleep(10**9)
 
-  worker:
+  chromadb:
+    image: chromadb/chroma:1.5.3
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -ec 'exec 3<>/dev/tcp/localhost/8000; printf \"GET /api/v2/heartbeat HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - llmnet
+
+  rag_ingest:
     <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import os
-        import time
-        import workers.gpu_workers as m
-        print(f"workers/gpu_workers.py container ready: {os.getenv('HOSTNAME')}")
-        time.sleep(10**9)
+    restart: "no"
+    command: ["python", "-m", "rag.ingest", "--once"]
+    environment:
+      <<: *app-env
+      PDF_CORPUS_DIR: /app/pdfs
+      RAG_INGEST_BATCH_SIZE: ${RAG_INGEST_BATCH_SIZE:-64}
+    volumes:
+      - ./pdfs:/app/pdfs:ro
+    depends_on:
+      chromadb:
+        condition: service_healthy
+
+  worker-1:
+    <<: *app
+    command: ["python", "-m", "workers.gpu_workers"]
+    ports:
+      - "9101:9100"
+    environment:
+      <<: *app-env
+      WORKER_ID: worker-1
+      WORKER_PORT: "9100"
+      WORKER_ADVERTISE_HOST: worker-1
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      rag_ingest:
+        condition: service_completed_successfully
+
+  worker-2:
+    <<: *app
+    command: ["python", "-m", "workers.gpu_workers"]
+    ports:
+      - "9102:9100"
+    environment:
+      <<: *app-env
+      WORKER_ID: worker-2
+      WORKER_PORT: "9100"
+      WORKER_ADVERTISE_HOST: worker-2
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      rag_ingest:
+        condition: service_completed_successfully
+
+  worker-3:
+    <<: *app
+    command: ["python", "-m", "workers.gpu_workers"]
+    ports:
+      - "9103:9100"
+    environment:
+      <<: *app-env
+      WORKER_ID: worker-3
+      WORKER_PORT: "9100"
+      WORKER_ADVERTISE_HOST: worker-3
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      rag_ingest:
+        condition: service_completed_successfully
+
+networks:
+  llmnet:
+
+volumes:
+  chroma-data:

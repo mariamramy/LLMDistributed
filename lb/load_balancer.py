@@ -1,5 +1,4 @@
 import asyncio
-from urllib import request
 import aiohttp
 from aiohttp import web
 import argparse
@@ -7,7 +6,6 @@ import logging
 import time
 from typing import List
 
-from lb import node
 from lb.node import Node                          
 from lb.strategies import BaseStrategy, RoundRobinStrategy, STRATEGIES  
 from lb.health_monitor import HealthMonitor  
@@ -18,7 +16,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("load_balancer")
 
-# Load Balancer Class
+#Load Balancer Class
 class LoadBalancer:
     def __init__(self, workers):
         self.workers = workers

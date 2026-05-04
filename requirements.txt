@@ -1,0 +1,6 @@
+aiohttp>=3.10,<4
+chromadb>=0.5,<2
+openai>=1.99,<3
+pypdf>=5,<7
+pytest>=8,<9
+pytest-asyncio>=0.24,<1
