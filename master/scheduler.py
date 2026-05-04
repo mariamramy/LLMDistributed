@@ -199,7 +199,8 @@ class MasterScheduler:
             payload = await request.json()
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
-
+        
+        # wraps the raw dict into task object from models.py, which has metadata like task_id, status, assigned_worker, timestamps, retries, etc
         task = Task(
             request_id=payload.get("request_id", str(uuid.uuid4())),
             payload=payload,
@@ -207,7 +208,7 @@ class MasterScheduler:
         )
 
         loop = asyncio.get_event_loop()
-        fut: asyncio.Future = loop.create_future()
+        fut: asyncio.Future = loop.create_future() # future allows the HTTP handler to wait asynchronously until the result is ready, without blocking the entire server
         self._pending[task.task_id] = fut
 
         await self._enqueue(task)
