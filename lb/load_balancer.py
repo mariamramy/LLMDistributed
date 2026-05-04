@@ -98,8 +98,8 @@ async def _forward_to(self, session, node: Node, payload: dict) -> web.Response:
     try:
         async with session.post(
             node.request_url, json=payload,
-            timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s),
-        ) as resp:
+            timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s), ##sends the apyload to the master scheduler with a timeout, if the request takes longer than the timeout, it will raise an exception
+        ) as resp: # captures the response from opening the connection from the master scheduler, if the master scheduler returns a non-200 status code, it will raise an exception
             data = await resp.json()
             return web.json_response(data, status=resp.status) # status from node,200 OK, 500 Internal Server Error, etc
     except Exception as exc:
@@ -107,3 +107,31 @@ async def _forward_to(self, session, node: Node, payload: dict) -> web.Response:
     finally:
         node.active_connections = max(0, node.active_connections - 1)  # undo the increment from the top, the request is done
 
+
+# ROUTE HANDLERS !!
+
+
+async def handle_request(self, request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    async with aiohttp.ClientSession() as session:
+        return await self._forward(session, payload)
+
+async def handle_health(self, _: web.Request) -> web.Response:
+    nodes_info = [
+        {"node_id": n.node_id, "url": n.url, "healthy": n.healthy,
+         "active_connections": n.active_connections, "load": round(n.load, 3),
+         "total_requests": n.total_requests}
+        for n in self.nodes
+    ]
+    return web.json_response({"status": "ok", "total_requests": self._total_requests,
+                               "total_failures": self._total_failures,
+                               "strategy": type(self.strategy).__name__, "nodes": nodes_info})
+
+async def handle_stats(self, _: web.Request) -> web.Response:
+    healthy_count = sum(1 for n in self.nodes if n.healthy)
+    return web.json_response({"healthy_nodes": healthy_count, "total_nodes": len(self.nodes),
+                               "total_requests": self._total_requests, "total_failures": self._total_failures,
+                               "strategy": type(self.strategy).__name__})
