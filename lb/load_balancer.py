@@ -135,3 +135,32 @@ async def handle_stats(self, _: web.Request) -> web.Response:
     return web.json_response({"healthy_nodes": healthy_count, "total_nodes": len(self.nodes),
                                "total_requests": self._total_requests, "total_failures": self._total_failures,
                                "strategy": type(self.strategy).__name__})
+
+
+
+
+# -----------------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------------
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="LLM Cluster — Load Balancer")
+    parser.add_argument("--host",     default="0.0.0.0")
+    parser.add_argument("--port",     type=int, default=8080)
+    parser.add_argument("--strategy", default="round_robin",
+                        choices=list(STRATEGIES.keys()))
+    parser.add_argument("--master-host", default="127.0.0.1")
+    parser.add_argument("--master-port", type=int, default=9000)
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    nodes = [Node(node_id="master-1", host=args.master_host, port=args.master_port)]
+    lb = LoadBalancer(
+        nodes=nodes,
+        strategy=STRATEGIES[args.strategy],
+        host=args.host,
+        port=args.port,
+    )
+    lb.run()

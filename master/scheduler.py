@@ -181,7 +181,177 @@ class MasterScheduler:
     async def _heartbeat_check_loop(self):
         
         while True:
-            await asyncio.sleep(self.heartbeat_check_interval)
             dead_ids = self._registry.check_timeouts()
             for wid in dead_ids:
                 await self._reassign_worker_tasks(wid)
+            await asyncio.sleep(self.heartbeat_check_interval)
+
+
+
+    # -------------------------------------------------------------------------
+    # HTTP Route Handlers
+    # -------------------------------------------------------------------------
+
+
+    # recieves from the lb, wraps the payload in a Task, puts it on the queue, and waits for the result Future to be resolved by the worker result handler. If the Future is not resolved within forward_timeout_s, it returns a 504 error to the client and marks the task as FAILED.
+    async def handle_request(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        task = Task(
+            request_id=payload.get("request_id", str(uuid.uuid4())),
+            payload=payload,
+            priority=payload.get("priority", 5),
+        )
+
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending[task.task_id] = fut
+
+        await self._enqueue(task)
+
+        log.info("Accepted request=%s → task=%s (queue_size=%d)",
+                 task.request_id[:8], task.task_id[:8], self._queue.qsize())
+
+        try:
+            result = await asyncio.wait_for(asyncio.shield(fut), timeout=self.forward_timeout_s)
+            return web.json_response(result)
+        except asyncio.TimeoutError:
+            self._pending.pop(task.task_id, None)
+            task.status = TaskStatus.FAILED
+            self._store.update(task)
+            return web.json_response({"error": "Request timed out", "task_id": task.task_id}, status=504)
+
+
+
+    # reports on the master's state; how many workers are alive, how big the queue is, what the load is
+    async def handle_worker_result(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        task_id = data.get("task_id")
+        task = self._store.get(task_id)
+
+        if not task:
+            return web.json_response({"error": "Unknown task_id"}, status=404)
+
+        task.status = TaskStatus.COMPLETED
+        task.completed_at = time.time()
+        task.result = data
+        self._store.update(task)
+        self._completed += 1
+
+        log.info("Result received for task=%s from worker=%s (%.1fms)",
+                 task_id[:8], data.get("worker_id", "?"),
+                 (task.completed_at - task.started_at) * 1000)
+
+        fut = self._pending.pop(task_id, None)
+        if fut and not fut.done():
+            fut.set_result(data)
+
+        return web.json_response({"status": "ok"})
+
+    async def handle_register(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        worker_id = data.get("worker_id") or str(uuid.uuid4())
+        host      = data.get("host", request.remote)
+        port      = int(data.get("port", 9100))
+
+        self._registry.register(worker_id, host, port)
+        return web.json_response({"status": "registered", "worker_id": worker_id})
+
+    async def handle_heartbeat(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        worker_id = data.get("worker_id")
+        load      = float(data.get("load", 0.0))
+
+        if not worker_id:
+            return web.json_response({"error": "Missing worker_id"}, status=400)
+
+        self._registry.heartbeat(worker_id, load)
+        return web.json_response({"status": "ok"})
+
+    async def handle_health(self, _: web.Request) -> web.Response:
+        healthy_workers = len(self._registry.get_healthy_workers())
+        total_workers   = len(self._registry.get_all())
+        queue_size      = self._queue.qsize()
+
+        max_capacity = max(total_workers * 10, 1)
+        load = min(1.0, queue_size / max_capacity)
+
+        return web.json_response({
+            "status":          "ok",
+            "load":            round(load, 3),
+            "healthy_workers": healthy_workers,
+            "total_workers":   total_workers,
+            "queue_size":      queue_size,
+        })
+
+    async def handle_stats(self, _: web.Request) -> web.Response:
+        workers = [
+            {
+                "worker_id":      w.worker_id,
+                "url":            w.url,
+                "healthy":        w.healthy,
+                "load":           round(w.load, 3),
+                "active_tasks":   w.active_tasks,
+                "total_tasks":    w.total_tasks,
+                "last_heartbeat": round(time.time() - w.last_heartbeat, 1),
+            }
+            for w in self._registry.get_all()
+        ]
+        return web.json_response({
+            "tasks":      self._store.summary(),
+            "dispatched": self._dispatched,
+            "completed":  self._completed,
+            "failed":     self._failed,
+            "queue_size": self._queue.qsize(),
+            "workers":    workers,
+        })
+
+    async def handle_deregister(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        worker_id = data.get("worker_id")
+        if worker_id:
+            await self._reassign_worker_tasks(worker_id)
+            self._registry.deregister(worker_id)
+
+        return web.json_response({"status": "deregistered"})
+
+    # -------------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------------
+
+    def run(self):
+        app = web.Application()
+        app.router.add_post("/request",    self.handle_request)
+        app.router.add_post("/result",     self.handle_worker_result)
+        app.router.add_post("/register",   self.handle_register)
+        app.router.add_post("/heartbeat",  self.handle_heartbeat)
+        app.router.add_post("/deregister", self.handle_deregister)
+        app.router.add_get("/health",      self.handle_health)
+        app.router.add_get("/stats",       self.handle_stats)
+
+        async def on_startup(_app):
+            asyncio.ensure_future(self._dispatch_loop())
+            asyncio.ensure_future(self._heartbeat_check_loop())
+            log.info("Master Scheduler started on %s:%d", self.host, self.port)
+
+        app.on_startup.append(on_startup)
+        web.run_app(app, host=self.host, port=self.port, print=None)
