@@ -50,17 +50,7 @@ class LoadBalancer:
         self._total_requests = 0
         self._total_failure = 0
 
-    async def _forward(self, session: aiohttp.ClientSession, payload: dict) -> web.Response:
-         node = self.strategy.select(self.nodes)
 
-         if node is None:
-             self._total_failure += 1
-             return web.json_response({"error": "Service unavailable — no healthy nodes"}, status=503)
-         
-         node.active_connections += 1
-         node.total_requests += 1
-         self._total_requests += 1
-         start = time.perf_counter()
 
 #forwards the payload to the selected node. It first checks if a node is available using the strategy, and if not, it returns a 503 error. If a node is selected, it increments the active connection count and total request count for that node and the load balancer. It then forwards the request to the selected node using an aiohttp client session, measuring the latency and logging it. If the request fails, it marks the node as unhealthy and tries one retry on a different node before returning an error response. Finally, it decrements the active connection count for the node.
 #  asks the strategy to pick a node then increments the active connection count and total request count for that node and the load balancer. It then forwards the request to the selected node using an aiohttp client session, measuring the latency and logging it. 
@@ -101,4 +91,21 @@ async def _forward(self, session: aiohttp.ClientSession, payload: dict) -> web.R
 
     finally:
         node.active_connections = max(0, node.active_connections - 1)
+
+
+# used when as a fallback when forward fails mid-request. It directly forwards to the specified node without using the strategy, and it does not do retries if it fails.
+# sends directly to a node 
+async def _forward_to(self, session, node: Node, payload: dict) -> web.Response:
+    node.active_connections += 1
+    try:
+        async with session.post(
+            node.request_url, json=payload,
+            timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s),
+        ) as resp:
+            data = await resp.json()
+            return web.json_response(data, status=resp.status) # status from node,200 OK, 500 Internal Server Error, etc
+    except Exception as exc:
+        return web.json_response({"error": str(exc)}, status=502)
+    finally:
+        node.active_connections = max(0, node.active_connections - 1)  # undo the increment from the top, the request is done
 
