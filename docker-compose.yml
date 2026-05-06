@@ -4,17 +4,19 @@ x-app: &app
     dockerfile: Dockerfile
   restart: unless-stopped
   environment: &app-env
-    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-nano}
-    OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-    OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-300}
+    LLM_PROVIDER: ollama
+    OLLAMA_BASE_URL: http://ollama:11434
+    OLLAMA_GENERATION_MODEL: ${OLLAMA_GENERATION_MODEL:-llama3.2:3b-instruct-q3_K_M}
+    OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-all-minilm}
+    OLLAMA_EMBED_MAX_CHARS: ${OLLAMA_EMBED_MAX_CHARS:-200}
+    OLLAMA_MAX_OUTPUT_TOKENS: ${OLLAMA_MAX_OUTPUT_TOKENS:-300}
     CHROMA_HOST: chromadb
     CHROMA_PORT: "8000"
-    CHROMA_COLLECTION: ${CHROMA_COLLECTION:-distributed_systems_textbook}
+    CHROMA_COLLECTION: ${CHROMA_COLLECTION:-distributed_systems_textbook_ollama_all_minilm}
     RAG_TOP_K: ${RAG_TOP_K:-3}
-    RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-1000}
-    RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-150}
-    WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-4}
+    RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-500}
+    RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-75}
+    WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-1}
     HEARTBEAT_INTERVAL_S: ${HEARTBEAT_INTERVAL_S:-5}
     MASTER_URL: ${MASTER_URL:-}
   networks:
@@ -101,6 +103,40 @@ services:
     networks:
       - llmnet
 
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+    networks:
+      - llmnet
+
+  ollama_pull:
+    image: ollama/ollama
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama pull "$$OLLAMA_GENERATION_MODEL"
+        ollama pull "$$OLLAMA_EMBEDDING_MODEL"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_GENERATION_MODEL: ${OLLAMA_GENERATION_MODEL:-llama3.2:3b-instruct-q3_K_M}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-all-minilm}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - llmnet
+
   rag_ingest:
     <<: *app
     restart: "no"
@@ -108,12 +144,14 @@ services:
     environment:
       <<: *app-env
       PDF_CORPUS_DIR: /app/pdfs
-      RAG_INGEST_BATCH_SIZE: ${RAG_INGEST_BATCH_SIZE:-64}
+      RAG_INGEST_BATCH_SIZE: ${RAG_INGEST_BATCH_SIZE:-16}
     volumes:
       - ./pdfs:/app/pdfs:ro
     depends_on:
       chromadb:
         condition: service_healthy
+      ollama_pull:
+        condition: service_completed_successfully
 
   worker-1:
     <<: *app
@@ -127,6 +165,8 @@ services:
       WORKER_ADVERTISE_HOST: worker-1
     depends_on:
       chromadb:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
       rag_ingest:
         condition: service_completed_successfully
@@ -144,6 +184,8 @@ services:
     depends_on:
       chromadb:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
       rag_ingest:
         condition: service_completed_successfully
 
@@ -160,6 +202,8 @@ services:
     depends_on:
       chromadb:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
       rag_ingest:
         condition: service_completed_successfully
 
@@ -168,3 +212,4 @@ networks:
 
 volumes:
   chroma-data:
+  ollama-data:

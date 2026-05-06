@@ -1,18 +1,15 @@
-from types import SimpleNamespace
-
 import pytest
 
-from rag.retriever import ChromaRAGRetriever
+from rag.retriever import ChromaRAGRetriever, DEFAULT_COLLECTION_NAME
 
 
-class FakeEmbeddings:
-    async def create(self, model, input):
-        return SimpleNamespace(data=[SimpleNamespace(embedding=[0.1, 0.2, 0.3])])
-
-
-class FakeOpenAIClient:
+class FakeOllamaClient:
     def __init__(self):
-        self.embeddings = FakeEmbeddings()
+        self.calls = []
+
+    async def embed_texts(self, texts, *, model):
+        self.calls.append({"texts": list(texts), "model": model})
+        return [[0.1, 0.2, 0.3]]
 
 
 class FakeCollection:
@@ -48,7 +45,7 @@ class FakeChromaClient:
 async def test_retriever_queries_chroma_with_prompt_embedding_and_top_k():
     collection = FakeCollection()
     retriever = ChromaRAGRetriever(
-        openai_client=FakeOpenAIClient(),
+        ollama_client=FakeOllamaClient(),
         chroma_client=FakeChromaClient(collection),
         top_k=2,
     )
@@ -61,3 +58,13 @@ async def test_retriever_queries_chroma_with_prompt_embedding_and_top_k():
     assert result.sources[0].source_file == "book.pdf"
     assert result.sources[0].page == 10
     assert retriever.retrieval_count == 1
+
+
+def test_retriever_defaults_to_ollama_collection():
+    retriever = ChromaRAGRetriever(
+        ollama_client=FakeOllamaClient(),
+        chroma_client=FakeChromaClient(FakeCollection()),
+    )
+
+    assert retriever.collection_name == DEFAULT_COLLECTION_NAME
+    assert retriever.embedding_model == "all-minilm"

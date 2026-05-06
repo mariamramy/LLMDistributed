@@ -40,13 +40,21 @@ class FakeRetriever:
         )
 
 
+class FakeOllamaClient:
+    def __init__(self, ready=True):
+        self.ready = ready
+
+    async def models_ready(self, generation_model, embedding_model):
+        return self.ready
+
+
 async def fake_llm_runner(prompt, sources, *, client, model, max_output_tokens):
     assert prompt == "Explain replication"
     assert len(sources) == 1
     return LLMResult(text="replication answer", model=model, usage={"output_tokens": 5})
 
 
-def make_worker(retriever=None, openai_client=None):
+def make_worker(retriever=None, ollama_client=None):
     config = WorkerConfig(
         worker_id="worker-test",
         host="127.0.0.1",
@@ -55,13 +63,15 @@ def make_worker(retriever=None, openai_client=None):
         master_url="",
         max_concurrency=4,
         heartbeat_interval_s=5,
-        openai_model="gpt-5.4-nano",
+        ollama_base_url="http://ollama:11434",
+        generation_model="llama3.2:3b-instruct-q3_K_M",
+        embedding_model="all-minilm",
         max_output_tokens=300,
     )
     return GPUWorker(
         config,
         retriever=retriever or FakeRetriever(),
-        openai_client=openai_client or object(),
+        ollama_client=ollama_client or FakeOllamaClient(),
         llm_runner=fake_llm_runner,
     )
 
@@ -75,6 +85,8 @@ async def test_health_reports_ready_worker():
 
     assert response.status == 200
     assert payload["worker_id"] == "worker-test"
+    assert payload["llm_provider"] == "ollama"
+    assert payload["llm_ready"] is True
     assert payload["rag_ready"] is True
     assert payload["chunk_count"] == 2
 
@@ -96,8 +108,7 @@ async def test_task_returns_answer_and_sources():
 
 
 @pytest.mark.asyncio
-async def test_task_rejects_missing_openai_key(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+async def test_task_rejects_unready_ollama():
     config = WorkerConfig(
         worker_id="worker-test",
         host="127.0.0.1",
@@ -106,10 +117,16 @@ async def test_task_rejects_missing_openai_key(monkeypatch):
         master_url="",
         max_concurrency=4,
         heartbeat_interval_s=5,
-        openai_model="gpt-5.4-nano",
+        ollama_base_url="http://ollama:11434",
+        generation_model="llama3.2:3b-instruct-q3_K_M",
+        embedding_model="all-minilm",
         max_output_tokens=300,
     )
-    worker = GPUWorker(config, retriever=FakeRetriever(), openai_client=None)
+    worker = GPUWorker(
+        config,
+        retriever=FakeRetriever(),
+        ollama_client=FakeOllamaClient(ready=False),
+    )
 
     response = await worker.handle_task(
         FakeRequest({"task_id": "task-1", "prompt": "Explain replication"})
@@ -117,4 +134,16 @@ async def test_task_rejects_missing_openai_key(monkeypatch):
     payload = json.loads(response.text)
 
     assert response.status == 503
-    assert payload["error"]["code"] == "openai_not_configured"
+    assert payload["error"]["code"] == "ollama_not_ready"
+
+
+@pytest.mark.asyncio
+async def test_metrics_exposes_ollama_errors_counter():
+    worker = make_worker()
+
+    response = await worker.handle_metrics(FakeRequest({}))
+    payload = json.loads(response.text)
+
+    assert response.status == 200
+    assert "ollama_errors" in payload
+    assert "openai_errors" not in payload
