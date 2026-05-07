@@ -11,12 +11,13 @@ from aiohttp import web
 from llm.inference import (
     DEFAULT_GENERATION_MODEL,
     DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_OLLAMA_BASE_URL,
     LLMResult,
     SourceSnippet,
-    create_openai_client,
+    create_ollama_client,
     generate_answer,
 )
-from rag.retriever import ChromaRAGRetriever
+from rag.retriever import DEFAULT_EMBEDDING_MODEL, ChromaRAGRetriever
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [WORKER] %(levelname)s %(message)s")
@@ -32,7 +33,9 @@ class WorkerConfig:
     master_url: str
     max_concurrency: int
     heartbeat_interval_s: float
-    openai_model: str
+    ollama_base_url: str
+    generation_model: str
+    embedding_model: str
     max_output_tokens: int
 
     @classmethod
@@ -44,11 +47,13 @@ class WorkerConfig:
             port=int(os.getenv("WORKER_PORT", "9100")),
             advertise_host=os.getenv("WORKER_ADVERTISE_HOST", worker_id),
             master_url=os.getenv("MASTER_URL", "").rstrip("/"),
-            max_concurrency=int(os.getenv("WORKER_MAX_CONCURRENCY", "4")),
+            max_concurrency=int(os.getenv("WORKER_MAX_CONCURRENCY", "1")),
             heartbeat_interval_s=float(os.getenv("HEARTBEAT_INTERVAL_S", "5")),
-            openai_model=os.getenv("OPENAI_MODEL", DEFAULT_GENERATION_MODEL),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
+            generation_model=os.getenv("OLLAMA_GENERATION_MODEL", DEFAULT_GENERATION_MODEL),
+            embedding_model=os.getenv("OLLAMA_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
             max_output_tokens=int(
-                os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
+                os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
             ),
         )
 
@@ -61,7 +66,7 @@ class WorkerMetrics:
     failed_tasks: int = 0
     total_latency_ms: float = 0.0
     retrieval_count: int = 0
-    openai_errors: int = 0
+    ollama_errors: int = 0
     chroma_errors: int = 0
 
     def avg_latency_ms(self) -> float:
@@ -78,14 +83,14 @@ class GPUWorker:
         config: WorkerConfig,
         *,
         retriever: Optional[ChromaRAGRetriever] = None,
-        openai_client: Optional[Any] = None,
+        ollama_client: Optional[Any] = None,
         llm_runner: LLMRunner = generate_answer,
     ):
         self.config = config
         self.metrics = WorkerMetrics()
         self._semaphore = asyncio.Semaphore(config.max_concurrency)
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._openai_client = openai_client
+        self._ollama_client = ollama_client
         self._retriever = retriever
         self._llm_runner = llm_runner
 
@@ -94,50 +99,65 @@ class GPUWorker:
         return min(1.0, self.metrics.active_tasks / max(1, self.config.max_concurrency))
 
     @property
-    def openai_configured(self) -> bool:
-        return bool(os.getenv("OPENAI_API_KEY")) or self._openai_client is not None
-
-    @property
-    def openai_client(self) -> Any:
-        if self._openai_client is None:
-            self._openai_client = create_openai_client()
-        return self._openai_client
+    def ollama_client(self) -> Any:
+        if self._ollama_client is None:
+            self._ollama_client = create_ollama_client(self.config.ollama_base_url)
+        return self._ollama_client
 
     @property
     def retriever(self) -> ChromaRAGRetriever:
         if self._retriever is None:
-            self._retriever = ChromaRAGRetriever(openai_client=self.openai_client)
+            self._retriever = ChromaRAGRetriever(
+                ollama_client=self.ollama_client,
+                embedding_model=self.config.embedding_model,
+            )
         return self._retriever
 
-    async def rag_ready(self) -> bool:
-        if not self.openai_configured:
+    async def llm_ready(self) -> bool:
+        try:
+            return await self.ollama_client.models_ready(
+                self.config.generation_model,
+                self.config.embedding_model,
+            )
+        except Exception:
+            self.metrics.ollama_errors += 1
             return False
+
+    async def chroma_ready(self) -> bool:
         try:
             return await self.retriever.is_ready()
         except Exception:
             self.metrics.chroma_errors += 1
             return False
 
+    async def rag_ready(self) -> bool:
+        llm_ready, chroma_ready = await asyncio.gather(self.llm_ready(), self.chroma_ready())
+        return llm_ready and chroma_ready
+
     async def chunk_count(self) -> int:
         try:
             return await self.retriever.count()
         except Exception:
+            self.metrics.chroma_errors += 1
             return 0
 
     async def readiness(self) -> Dict[str, Any]:
-        rag_ready = await self.rag_ready()
-        chunk_count = await self.chunk_count() if rag_ready else 0
+        llm_ready, chroma_ready = await asyncio.gather(self.llm_ready(), self.chroma_ready())
+        rag_ready = llm_ready and chroma_ready
+        chunk_count = await self.chunk_count() if chroma_ready else 0
         return {
             "worker_id": self.config.worker_id,
             "status": "ok" if rag_ready else "unready",
-            "openai_configured": self.openai_configured,
+            "llm_provider": "ollama",
+            "llm_ready": llm_ready,
             "rag_ready": rag_ready,
-            "chroma_ready": rag_ready,
+            "chroma_ready": chroma_ready,
             "chunk_count": chunk_count,
             "active_tasks": self.metrics.active_tasks,
             "total_tasks": self.metrics.total_tasks,
             "load": self.load,
-            "model": self.config.openai_model,
+            "model": self.config.generation_model,
+            "embedding_model": self.config.embedding_model,
         }
 
     async def handle_health(self, request: web.Request) -> web.Response:
@@ -146,8 +166,9 @@ class GPUWorker:
         return web.json_response(readiness, status=status)
 
     async def handle_metrics(self, request: web.Request) -> web.Response:
-        rag_ready = await self.rag_ready()
-        chunk_count = await self.chunk_count() if rag_ready else 0
+        llm_ready, chroma_ready = await asyncio.gather(self.llm_ready(), self.chroma_ready())
+        rag_ready = llm_ready and chroma_ready
+        chunk_count = await self.chunk_count() if chroma_ready else 0
         self.metrics.retrieval_count = getattr(self._retriever, "retrieval_count", 0)
         payload = {
             "worker_id": self.config.worker_id,
@@ -158,11 +179,13 @@ class GPUWorker:
             "completed_tasks": self.metrics.completed_tasks,
             "failed_tasks": self.metrics.failed_tasks,
             "avg_latency_ms": round(self.metrics.avg_latency_ms(), 2),
+            "llm_provider": "ollama",
+            "llm_ready": llm_ready,
             "rag_ready": rag_ready,
-            "chroma_ready": rag_ready,
+            "chroma_ready": chroma_ready,
             "chunk_count": chunk_count,
             "retrieval_count": self.metrics.retrieval_count,
-            "openai_errors": self.metrics.openai_errors,
+            "ollama_errors": self.metrics.ollama_errors,
             "chroma_errors": self.metrics.chroma_errors,
         }
         return web.json_response(payload)
@@ -182,11 +205,18 @@ class GPUWorker:
             return self._task_error(task_id, "missing_task_id", "task_id is required", status=400)
         if not prompt:
             return self._task_error(task_id, "missing_prompt", "prompt is required", status=400)
-        if not self.openai_configured:
+        if not await self.llm_ready():
             return self._task_error(
                 task_id,
-                "openai_not_configured",
-                "OPENAI_API_KEY is required",
+                "ollama_not_ready",
+                "Ollama is not reachable or required models are not installed",
+                status=503,
+            )
+        if use_rag and not await self.chroma_ready():
+            return self._task_error(
+                task_id,
+                "rag_not_ready",
+                "ChromaDB is not reachable or the textbook collection has no chunks",
                 status=503,
             )
 
@@ -203,8 +233,8 @@ class GPUWorker:
                 llm_result = await self._llm_runner(
                     prompt,
                     sources,
-                    client=self.openai_client,
-                    model=self.config.openai_model,
+                    client=self.ollama_client,
+                    model=self.config.generation_model,
                     max_output_tokens=self.config.max_output_tokens,
                 )
 
@@ -235,7 +265,7 @@ class GPUWorker:
                 if "chroma" in exc.__class__.__name__.lower():
                     self.metrics.chroma_errors += 1
                 else:
-                    self.metrics.openai_errors += 1
+                    self.metrics.ollama_errors += 1
                 log.exception("Task %s failed after %.1fms", task_id, latency_ms)
                 return self._task_error(task_id, "task_failed", str(exc), status=502)
             finally:

@@ -1,25 +1,21 @@
-from types import SimpleNamespace
-
 import pytest
 
 from rag.ingest import (
     DocumentChunk,
+    delete_stale_chunks,
     ingest_chunks,
     make_chunk_id,
     split_text,
 )
 
 
-class FakeEmbeddings:
-    async def create(self, model, input):
-        return SimpleNamespace(
-            data=[SimpleNamespace(embedding=[float(index), 0.0]) for index, _ in enumerate(input)]
-        )
-
-
-class FakeOpenAIClient:
+class FakeOllamaClient:
     def __init__(self):
-        self.embeddings = FakeEmbeddings()
+        self.calls = []
+
+    async def embed_texts(self, texts, *, model):
+        self.calls.append({"texts": list(texts), "model": model})
+        return [[float(index), 0.0] for index, _ in enumerate(texts)]
 
 
 class FakeCollection:
@@ -28,6 +24,17 @@ class FakeCollection:
 
     def upsert(self, **kwargs):
         self.upserts.append(kwargs)
+
+
+class FakeCleanupCollection:
+    def __init__(self):
+        self.deleted_ids = []
+
+    def get(self):
+        return {"ids": ["id-1", "id-2", "stale-id"]}
+
+    def delete(self, **kwargs):
+        self.deleted_ids.extend(kwargs["ids"])
 
 
 def test_split_text_uses_overlap_and_never_returns_full_empty_text():
@@ -54,9 +61,9 @@ async def test_ingest_chunks_upserts_deterministic_ids_without_duplicates():
 
     inserted = await ingest_chunks(
         collection,
-        FakeOpenAIClient(),
+        FakeOllamaClient(),
         chunks,
-        embedding_model="text-embedding-3-small",
+        embedding_model="all-minilm",
         batch_size=10,
     )
 
@@ -64,3 +71,13 @@ async def test_ingest_chunks_upserts_deterministic_ids_without_duplicates():
     assert collection.upserts[0]["ids"] == ["id-1", "id-2"]
     assert collection.upserts[0]["metadatas"][0]["source_file"] == "book.pdf"
     assert collection.upserts[0]["documents"] == ["chunk one", "chunk two"]
+
+
+@pytest.mark.asyncio
+async def test_delete_stale_chunks_removes_ids_not_in_current_ingestion():
+    collection = FakeCleanupCollection()
+
+    deleted = await delete_stale_chunks(collection, ["id-1", "id-2"])
+
+    assert deleted == 1
+    assert collection.deleted_ids == ["stale-id"]

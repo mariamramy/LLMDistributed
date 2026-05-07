@@ -7,15 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 
+from llm.inference import create_ollama_client
 from rag.retriever import DEFAULT_COLLECTION_NAME, DEFAULT_EMBEDDING_MODEL
 
 
 log = logging.getLogger("rag_ingest")
 
 DEFAULT_PDF_CORPUS_DIR = "pdfs"
-DEFAULT_CHUNK_SIZE = 1000
-DEFAULT_CHUNK_OVERLAP = 150
-DEFAULT_BATCH_SIZE = 64
+DEFAULT_CHUNK_SIZE = 500
+DEFAULT_CHUNK_OVERLAP = 75
+DEFAULT_BATCH_SIZE = 16
 
 
 @dataclass
@@ -54,7 +55,7 @@ def load_config() -> IngestConfig:
         chroma_host=os.getenv("CHROMA_HOST", "chromadb"),
         chroma_port=int(os.getenv("CHROMA_PORT", "8000")),
         collection_name=os.getenv("CHROMA_COLLECTION", DEFAULT_COLLECTION_NAME),
-        embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        embedding_model=os.getenv("OLLAMA_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
         chunk_size=int(os.getenv("RAG_CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE))),
         chunk_overlap=int(os.getenv("RAG_CHUNK_OVERLAP", str(DEFAULT_CHUNK_OVERLAP))),
         batch_size=int(os.getenv("RAG_INGEST_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))),
@@ -136,13 +137,12 @@ async def embed_texts(
     *,
     model: str,
 ) -> List[List[float]]:
-    response = await client.embeddings.create(model=model, input=list(texts))
-    return [item.embedding for item in response.data]
+    return await client.embed_texts(texts, model=model)
 
 
 async def ingest_chunks(
     collection: Any,
-    openai_client: Any,
+    ollama_client: Any,
     chunks: Sequence[DocumentChunk],
     *,
     embedding_model: str,
@@ -151,7 +151,7 @@ async def ingest_chunks(
     inserted = 0
     for batch in batched(chunks, batch_size):
         documents = [chunk.text for chunk in batch]
-        embeddings = await embed_texts(openai_client, documents, model=embedding_model)
+        embeddings = await embed_texts(ollama_client, documents, model=embedding_model)
         await asyncio.to_thread(
             collection.upsert,
             ids=[chunk.chunk_id for chunk in batch],
@@ -164,10 +164,19 @@ async def ingest_chunks(
     return inserted
 
 
-async def run_ingestion(config: IngestConfig) -> int:
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is required for PDF ingestion")
+async def delete_stale_chunks(collection: Any, expected_ids: Sequence[str]) -> int:
+    expected = set(expected_ids)
+    existing = await asyncio.to_thread(collection.get)
+    existing_ids = set(existing.get("ids") or [])
+    stale_ids = sorted(existing_ids - expected)
+    if not stale_ids:
+        return 0
+    await asyncio.to_thread(collection.delete, ids=stale_ids)
+    log.info("Deleted %d stale chunks from collection", len(stale_ids))
+    return len(stale_ids)
 
+
+async def run_ingestion(config: IngestConfig) -> int:
     pdfs = find_pdfs(config.pdf_dir)
     if not pdfs:
         raise RuntimeError(f"No PDF files found in {config.pdf_dir}")
@@ -186,18 +195,22 @@ async def run_ingestion(config: IngestConfig) -> int:
         raise RuntimeError("PDF extraction produced no text chunks")
 
     import chromadb
-    from openai import AsyncOpenAI
 
     chroma_client = chromadb.HttpClient(host=config.chroma_host, port=config.chroma_port)
     collection = chroma_client.get_or_create_collection(name=config.collection_name)
-    openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    ollama_client = create_ollama_client()
+    if not await ollama_client.has_model(config.embedding_model):
+        raise RuntimeError(
+            f"Ollama embedding model {config.embedding_model!r} is not installed or reachable"
+        )
     inserted = await ingest_chunks(
         collection,
-        openai_client,
+        ollama_client,
         chunks,
         embedding_model=config.embedding_model,
         batch_size=config.batch_size,
     )
+    await delete_stale_chunks(collection, [chunk.chunk_id for chunk in chunks])
     log.info("Collection %s now contains %d chunks", config.collection_name, collection.count())
     return inserted
 

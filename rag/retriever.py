@@ -3,11 +3,11 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
-from llm.inference import SourceSnippet
+from llm.inference import OllamaClient, SourceSnippet, create_ollama_client
 
 
-DEFAULT_COLLECTION_NAME = "distributed_systems_textbook"
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_COLLECTION_NAME = "distributed_systems_textbook_ollama_all_minilm"
+DEFAULT_EMBEDDING_MODEL = "all-minilm"
 DEFAULT_TOP_K = 3
 
 
@@ -20,7 +20,7 @@ class ChromaRAGRetriever:
     def __init__(
         self,
         *,
-        openai_client: Any,
+        ollama_client: Optional[OllamaClient] = None,
         chroma_host: Optional[str] = None,
         chroma_port: Optional[int] = None,
         collection_name: Optional[str] = None,
@@ -28,14 +28,14 @@ class ChromaRAGRetriever:
         top_k: Optional[int] = None,
         chroma_client: Optional[Any] = None,
     ):
-        self.openai_client = openai_client
+        self.ollama_client = ollama_client or create_ollama_client()
         self.chroma_host = chroma_host or os.getenv("CHROMA_HOST", "chromadb")
         self.chroma_port = int(chroma_port or os.getenv("CHROMA_PORT", "8000"))
         self.collection_name = collection_name or os.getenv(
             "CHROMA_COLLECTION", DEFAULT_COLLECTION_NAME
         )
         self.embedding_model = embedding_model or os.getenv(
-            "OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
+            "OLLAMA_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
         )
         self.top_k = int(top_k or os.getenv("RAG_TOP_K", str(DEFAULT_TOP_K)))
         self._client = chroma_client
@@ -57,11 +57,7 @@ class ChromaRAGRetriever:
         return self._collection
 
     async def embed_texts(self, texts: Sequence[str]) -> List[List[float]]:
-        response = await self.openai_client.embeddings.create(
-            model=self.embedding_model,
-            input=list(texts),
-        )
-        return [item.embedding for item in response.data]
+        return await self.ollama_client.embed_texts(texts, model=self.embedding_model)
 
     async def count(self) -> int:
         return await asyncio.to_thread(self.collection.count)
