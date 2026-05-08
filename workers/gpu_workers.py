@@ -298,15 +298,27 @@ class GPUWorker:
             "host": self.config.advertise_host,
             "port": self.config.port,
         }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.config.master_url}/register", json=payload, timeout=5) as resp:
-                    if resp.status < 300:
-                        log.info("Registered worker %s with master", self.config.worker_id)
-                    else:
-                        log.warning("Master registration returned status %d", resp.status)
-        except Exception as exc:
-            log.warning("Master registration failed: %s", exc)
+        # CHANGED: retry up to 10 times with 3 second delay
+        for attempt in range(10):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.config.master_url}/register",
+                        json=payload,
+                        timeout=5
+                    ) as resp:
+                        if resp.status < 300:
+                            log.info("Registered worker %s with master", self.config.worker_id)
+                            return
+                        else:
+                            log.warning("Master registration returned status %d", resp.status)
+            except Exception as exc:
+                log.warning(
+                    "Master registration attempt %d/10 failed: %s — retrying in 3s",
+                    attempt + 1, exc
+                )
+                await asyncio.sleep(3)
+        log.warning("Could not register with master after 10 attempts — continuing anyway")
 
     async def heartbeat_loop(self) -> None:
         if not self.config.master_url:

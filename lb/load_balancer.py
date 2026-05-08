@@ -1,4 +1,5 @@
 import asyncio
+import os  
 import aiohttp
 from aiohttp import web
 import argparse
@@ -26,7 +27,7 @@ class LoadBalancer:
             host: str = '0.0.0.0',
             port: int = 8080,
             health_interval_s: float = 5.0,
-            forward_timeout_s: int = 30
+            forward_timeout_s: int = int(os.getenv("LB_FORWARD_TIMEOUT_S", "120"))  # CHANGED from 30
     ):
         self.nodes = nodes
         self.strategy = strategy or RoundRobinStrategy()
@@ -183,18 +184,23 @@ def parse_args():
     parser.add_argument("--port",        type=int, default=8080)
     parser.add_argument("--strategy",    default="round_robin",
                         choices=list(STRATEGIES.keys()))
-    parser.add_argument("--master-host", default="127.0.0.1")
-    parser.add_argument("--master-port", type=int, default=9000)
+    parser.add_argument("--master-host", default=os.getenv("MASTER_HOST", "scheduler"))  # CHANGED
+    parser.add_argument("--master-port", type=int, default=int(os.getenv("MASTER_PORT", "9000")))  # CHANGED
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    nodes = [Node(node_id="master-1", host=args.master_host, port=args.master_port)]
+    nodes = [Node(
+        node_id="master-1",
+        host=os.getenv("MASTER_HOST", args.master_host),
+        port=int(os.getenv("MASTER_PORT", args.master_port)),
+    )]
     lb = LoadBalancer(
         nodes=nodes,
         strategy=STRATEGIES[args.strategy],
         host=args.host,
         port=args.port,
+        forward_timeout_s=int(os.getenv("LB_FORWARD_TIMEOUT_S", "120")),
     )
     lb.run()

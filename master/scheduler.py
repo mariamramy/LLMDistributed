@@ -70,11 +70,25 @@ class MasterScheduler:
                 timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s),
             ) as resp:
                 if resp.status == 200:
+                    # Read the full result from the worker
+                    result = await resp.json()
                     log.info(
-                        "Dispatched task=%s → worker=%s",
+                        "Task=%s completed by worker=%s",
                         task.task_id[:8], worker.worker_id,
                     )
                     self._dispatched += 1
+                    self._completed += 1
+
+                    # Mark task complete and resolve the pending Future
+                    task.status = TaskStatus.COMPLETED
+                    task.completed_at = time.time()
+                    task.result = result
+                    self._store.update(task)
+
+                    fut = self._pending.pop(task.task_id, None)
+                    if fut and not fut.done():
+                        fut.set_result(result)
+
                     return True
                 else:
                     log.warning(
@@ -355,4 +369,17 @@ class MasterScheduler:
             log.info("Master Scheduler started on %s:%d", self.host, self.port)
 
         app.on_startup.append(on_startup)
-        web.run_app(app, host=self.host, port=self.port, print=None)
+        web.run_app(app, host=self.host, port=self.port)
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [MASTER] %(levelname)s %(message)s",
+    )
+    parser = argparse.ArgumentParser(description="LLM Cluster — Master Scheduler")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=9000)
+    args = parser.parse_args()
+    scheduler = MasterScheduler(host=args.host, port=args.port)
+    scheduler.run()
