@@ -4,7 +4,6 @@ import argparse
 import time
 import random
 import uuid
-import json
 import logging
 from dataclasses import dataclass, field, asdict
 from typing import List
@@ -78,7 +77,7 @@ class LoadGenerator:
         num_users: int = 1000,
         requests_per_user: int = 1,
         think_time_ms: int = 0,
-        timeout_s: int = 30,
+        timeout_s: int = 120,        # FIX: was 30, must match master timeout
     ):
         self.lb_url = lb_url
         self.num_users = num_users
@@ -110,7 +109,7 @@ class LoadGenerator:
                 json=req.to_dict(),
                 timeout=aiohttp.ClientTimeout(total=self.timeout_s),
             ) as resp:
-                await resp.json()          # consume body
+                await resp.json()
                 latency_ms = (time.perf_counter() - start) * 1000
                 return RequestResult(
                     request_id=req.request_id,
@@ -155,7 +154,7 @@ class LoadGenerator:
 
     async def run(self):
         """Spawn all virtual-user coroutines concurrently and await completion."""
-        connector = aiohttp.TCPConnector(limit=0)           # no connection cap
+        connector = aiohttp.TCPConnector(limit=0)
         async with aiohttp.ClientSession(connector=connector) as session:
             tasks = [
                 self._virtual_user(session, uid)
@@ -184,11 +183,11 @@ class LoadGenerator:
         latencies = [r.latency_ms for r in successes]
 
         latencies.sort()
-        p50  = latencies[int(len(latencies) * 0.50)] if latencies else 0
-        p95  = latencies[int(len(latencies) * 0.95)] if latencies else 0
-        p99  = latencies[int(len(latencies) * 0.99)] if latencies else 0
-        avg  = sum(latencies) / len(latencies) if latencies else 0
-        rps  = total / wall_time if wall_time > 0 else 0
+        p50 = latencies[int(len(latencies) * 0.50)] if latencies else 0
+        p95 = latencies[int(len(latencies) * 0.95)] if latencies else 0
+        p99 = latencies[int(len(latencies) * 0.99)] if latencies else 0
+        avg = sum(latencies) / len(latencies) if latencies else 0
+        rps = total / wall_time if wall_time > 0 else 0
 
         print("\n" + "=" * 60)
         print("           LOAD TEST REPORT")
@@ -212,12 +211,12 @@ class LoadGenerator:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="LLM Cluster — Client Load Generator")
-    parser.add_argument("--users",    type=int, default=100,   help="Number of concurrent virtual users")
-    parser.add_argument("--rpu",      type=int, default=1,     help="Requests per user")
-    parser.add_argument("--think",    type=int, default=0,     help="Think time between requests (ms)")
-    parser.add_argument("--timeout",  type=int, default=30,    help="Per-request timeout (s)")
-    parser.add_argument("--lb-host",  type=str, default="127.0.0.1")
-    parser.add_argument("--lb-port",  type=int, default=8080)
+    parser.add_argument("--users",   type=int, default=100,         help="Number of concurrent virtual users")
+    parser.add_argument("--rpu",     type=int, default=1,           help="Requests per user")
+    parser.add_argument("--think",   type=int, default=0,           help="Think time between requests (ms)")
+    parser.add_argument("--timeout", type=int, default=120,         help="Per-request timeout (s)")  # FIX: was 30
+    parser.add_argument("--lb-host", type=str, default="127.0.0.1")
+    parser.add_argument("--lb-port", type=int, default=8080)
     return parser.parse_args()
 
 
@@ -226,6 +225,7 @@ def run_load_test(
     requests_per_user: int = 1,
     lb_host: str = "127.0.0.1",
     lb_port: int = 8080,
+    timeout_s: int = 120,            # FIX: added parameter so callers can control it
 ):
     """Convenience wrapper called from main.py."""
     url = f"http://{lb_host}:{lb_port}/request"
@@ -233,6 +233,7 @@ def run_load_test(
         lb_url=url,
         num_users=num_users,
         requests_per_user=requests_per_user,
+        timeout_s=timeout_s,         # FIX: now actually passed through
     )
     asyncio.run(generator.run())
 
