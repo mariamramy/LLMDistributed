@@ -49,7 +49,7 @@ async def send_task(session, task_id, wall_start):
 
 
 async def main():
-    NUM_REQUESTS = 9  # 3 per worker — change to 30 for a longer test
+    NUM_REQUESTS = 30  # 3 per worker — change to 30 for a longer test
 
     print(f"\nSending {NUM_REQUESTS} requests through the full pipeline...")
     print(f"Route: Client → Load Balancer → Master → Workers → Ollama")

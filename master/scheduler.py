@@ -53,61 +53,69 @@ class MasterScheduler:
     async def _dispatch_to_worker(
         self, session: aiohttp.ClientSession, worker: WorkerInfo, task: Task) -> bool:
         
-        # update state before sending
         task.status = TaskStatus.IN_FLIGHT
-        task.assigned_worker = worker.worker_id # assigned to which worker
-        task.started_at = time.time() 
+        task.assigned_worker = worker.worker_id
+        task.started_at = time.time()
         self._store.update(task)
         self._registry.update_task_count(worker.worker_id, +1)
         worker.total_tasks += 1
 
         try:
-
-            # send the HTTP request
             async with session.post(
                 worker.task_url,
                 json={"task_id": task.task_id, **task.payload},
                 timeout=aiohttp.ClientTimeout(total=self.forward_timeout_s),
             ) as resp:
                 if resp.status == 200:
-                    # Read the full result from the worker
                     result = await resp.json()
-                    log.info(
-                        "Task=%s completed by worker=%s",
-                        task.task_id[:8], worker.worker_id,
-                    )
+                    log.info("Task=%s completed by worker=%s",
+                            task.task_id[:8], worker.worker_id)
                     self._dispatched += 1
                     self._completed += 1
-
-                    # Mark task complete and resolve the pending Future
                     task.status = TaskStatus.COMPLETED
                     task.completed_at = time.time()
                     task.result = result
                     self._store.update(task)
-
                     fut = self._pending.pop(task.task_id, None)
                     if fut and not fut.done():
                         fut.set_result(result)
-
                     return True
                 else:
-                    log.warning(
-                        "Worker %s rejected task=%s status=%d",
-                        worker.worker_id, task.task_id[:8], resp.status,
-                    )
+                    log.warning("Worker %s rejected task=%s status=%d",
+                                worker.worker_id, task.task_id[:8], resp.status)
+                    # Re-queue on failure
+                    if task.retries < MAX_TASK_RETRIES:
+                        task.retries += 1
+                        task.status = TaskStatus.PENDING
+                        await self._queue.put((task.priority, task.created_at, task))
+                    else:
+                        task.status = TaskStatus.FAILED
+                        self._store.update(task)
+                        self._failed += 1
+                        fut = self._pending.pop(task.task_id, None)
+                        if fut and not fut.done():
+                            fut.set_result({"error": "Worker rejected task"})
                     return False
-                
+
         except Exception as exc:
-            log.warning(
-                "Dispatch to worker=%s failed for task=%s: %s",
-                worker.worker_id, task.task_id[:8], exc,
-            )
+            log.warning("Dispatch to worker=%s failed for task=%s: %s",
+                        worker.worker_id, task.task_id[:8], exc)
             worker.healthy = False
+            if task.retries < MAX_TASK_RETRIES:
+                task.retries += 1
+                task.status = TaskStatus.PENDING
+                await self._queue.put((task.priority, task.created_at, task))
+            else:
+                task.status = TaskStatus.FAILED
+                self._store.update(task)
+                self._failed += 1
+                fut = self._pending.pop(task.task_id, None)
+                if fut and not fut.done():
+                    fut.set_result({"error": "Dispatch failed after max retries"})
             return False
-        # always decrements the worker's active task count by -1 
+
         finally:
             self._registry.update_task_count(worker.worker_id, -1)
-
 
     # FAULT TOLERANCE
     # Move all in-flight tasks of a dead worker back to the queue
@@ -168,23 +176,9 @@ class MasterScheduler:
                         self._queue.get(), timeout=1.0
                     )
 
-                    success = await self._dispatch_to_worker(session, worker, task)
-                    
-                    # if function dispatch to worker returned false
-                    if not success:
-                        # Re-queue if dispatch failed
-                        if task.retries < MAX_TASK_RETRIES:
-                            task.retries += 1
-                            task.status = TaskStatus.PENDING
-                            await self._queue.put((task.priority, task.created_at, task))
-                        else:
-                            task.status = TaskStatus.FAILED
-                            self._store.update(task)
-                            self._failed += 1
-                            fut = self._pending.pop(task.task_id, None)
-                            if fut and not fut.done():
-                                fut.set_result({"error": "Dispatch failed"})
-
+                    asyncio.create_task(
+                    self._dispatch_to_worker(session, worker, task)
+                    )
                 except asyncio.TimeoutError:
                     pass  # Queue was empty, loop again
                 except Exception as exc:
