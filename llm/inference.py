@@ -32,21 +32,25 @@ class LLMConfigurationError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, base_url: Optional[str] = None, timeout_s: Optional[float] = None):
+    def __init__(self, base_url: Optional[str] = None, timeout_s: Optional[float] = None, ssl_verify: bool = True):
         self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).rstrip(
             "/"
         )
         self.timeout_s = float(timeout_s or os.getenv("OLLAMA_REQUEST_TIMEOUT_S", "120"))
+        self.ssl_verify = ssl_verify
+
+    def _make_connector(self) -> aiohttp.TCPConnector:
+        return aiohttp.TCPConnector(ssl=None if self.ssl_verify else False)
 
     async def _get(self, path: str) -> Dict[str, Any]:
         timeout = aiohttp.ClientTimeout(total=self.timeout_s)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=self._make_connector(), timeout=timeout) as session:
             async with session.get(f"{self.base_url}{path}") as response:
                 return await _json_or_error(response)
 
     async def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         timeout = aiohttp.ClientTimeout(total=self.timeout_s)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(connector=self._make_connector(), timeout=timeout) as session:
             async with session.post(f"{self.base_url}{path}", json=payload) as response:
                 return await _json_or_error(response)
 
@@ -105,8 +109,8 @@ class OllamaClient:
         return embeddings
 
 
-def create_ollama_client(base_url: Optional[str] = None) -> OllamaClient:
-    return OllamaClient(base_url=base_url)
+def create_ollama_client(base_url: Optional[str] = None, ssl_verify: bool = True) -> OllamaClient:
+    return OllamaClient(base_url=base_url, ssl_verify=ssl_verify)
 
 
 def build_response_input(prompt: str, sources: Iterable[SourceSnippet]) -> List[Dict[str, str]]:

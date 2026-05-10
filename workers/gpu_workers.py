@@ -37,6 +37,7 @@ class WorkerConfig:
     generation_model: str
     embedding_model: str
     max_output_tokens: int
+    ollama_ssl_verify: bool = True
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -55,6 +56,7 @@ class WorkerConfig:
             max_output_tokens=int(
                 os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
             ),
+            ollama_ssl_verify=os.getenv("OLLAMA_SSL_VERIFY", "true").lower() != "false",
         )
 
 
@@ -106,7 +108,10 @@ class GPUWorker:
     @property
     def ollama_client(self) -> Any:
         if self._ollama_client is None:
-            self._ollama_client = create_ollama_client(self.config.ollama_base_url)
+            self._ollama_client = create_ollama_client(
+                self.config.ollama_base_url,
+                ssl_verify=self.config.ollama_ssl_verify,
+            )
         return self._ollama_client
 
     @property
