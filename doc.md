@@ -1,5 +1,89 @@
 # LLMDistributed — Project Documentation
 
+---
+
+## Teammate Quick Start
+
+> Everything you need to run the full project from scratch. Read this first.
+
+### What you need before starting
+- **Docker Desktop** installed and running (with GPU support enabled)
+- **NVIDIA GPU** with CUDA support and at least 6GB VRAM
+- **Python 3.11+** installed locally
+- **The textbook PDF** — get it from Noha and place it in the `pdfs/` folder (create the folder if it doesn't exist)
+
+### Step 1 — Clone and set up
+```bash
+git clone <repo-url>
+cd LLMDistributed
+```
+
+Create the `pdfs/` folder and drop the textbook PDF inside it:
+```bash
+mkdir pdfs
+# copy the PDF file into pdfs/
+```
+
+Copy the environment file:
+```bash
+cp .env.example .env
+```
+You do not need to edit `.env` — the defaults work out of the box.
+
+### Step 2 — Start everything
+```powershell
+docker compose up -d
+```
+
+This will:
+1. Download Ollama and ChromaDB Docker images (~1GB first time)
+2. Pull `llama3.2:3b-instruct-q3_K_M` (~1.7GB) and `all-minilm` (~46MB) — **first run only, takes 5-10 minutes**
+3. Ingest the PDF into ChromaDB — **takes 3-5 minutes**
+4. Start all 3 workers
+
+**Be patient on the first run.** Subsequent runs start in under 60 seconds.
+
+### Step 3 — Verify everything is running
+```powershell
+docker compose ps
+```
+All services should show `Up`. Then check workers are registered:
+```powershell
+curl http://localhost:9000/stats
+```
+You should see 3 workers with `"healthy": true`. If you see 5 workers, the Thundercompute nodes are also connected.
+
+### Step 4 — Send a test request
+```powershell
+curl -X POST http://localhost:8080/request -H "Content-Type: application/json" -d "{\"prompt\": \"What is the CAP theorem?\", \"use_rag\": false}"
+```
+You should get back a JSON response with `"status": "completed"` and an answer from the LLM.
+
+### Step 5 — Run the 1000-request load test
+```powershell
+python tests/integration_load_test.py --requests 1000 --concurrency 20 --timeout 300
+```
+This runs the full pipeline and prints a report at the end showing throughput, latency, success rate, and how many requests each worker handled.
+
+### Step 6 — Shut down when done
+```powershell
+docker compose down
+```
+
+---
+
+### Common issues
+
+**Workers not starting** — `rag_ingest` is still running (embedding the PDF). Wait for it to finish: `docker compose logs rag_ingest`
+
+**Port already in use** — something else is using 8080, 9000, 8000, or 11434. Stop it or change the port in `docker-compose.yml`
+
+**Out of memory / GPU error** — close other GPU-heavy applications. The model needs ~2GB VRAM minimum.
+
+**worker-4 / worker-5 unhealthy** — Thundercompute instance is offline. Ignore it — the system runs fine on 3 local workers only.
+
+---
+
 ## Overview
 
 A fully distributed LLM inference system built for CSE354. Client requests flow through a load balancer to a master scheduler, which distributes tasks across multiple GPU workers. Each worker performs RAG (Retrieval-Augmented Generation) using a local vector database and generates answers using a local LLM via Ollama.
