@@ -3,7 +3,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 from aiohttp import web
@@ -93,6 +93,11 @@ class GPUWorker:
         self._ollama_client = ollama_client
         self._retriever = retriever
         self._llm_runner = llm_runner
+        # Cache readiness results for READY_CACHE_TTL_S seconds to avoid
+        # hitting Ollama/ChromaDB on every incoming task request.
+        self._llm_ready_cache: Optional[Tuple[bool, float]] = None
+        self._chroma_ready_cache: Optional[Tuple[bool, float]] = None
+        self._ready_cache_ttl_s: float = 30.0
 
     @property
     def load(self) -> float:
@@ -114,21 +119,35 @@ class GPUWorker:
         return self._retriever
 
     async def llm_ready(self) -> bool:
+        now = time.monotonic()
+        if self._llm_ready_cache is not None:
+            result, ts = self._llm_ready_cache
+            if now - ts < self._ready_cache_ttl_s:
+                return result
         try:
-            return await self.ollama_client.models_ready(
+            result = await self.ollama_client.models_ready(
                 self.config.generation_model,
                 self.config.embedding_model,
             )
         except Exception:
             self.metrics.ollama_errors += 1
-            return False
+            result = False
+        self._llm_ready_cache = (result, now)
+        return result
 
     async def chroma_ready(self) -> bool:
+        now = time.monotonic()
+        if self._chroma_ready_cache is not None:
+            result, ts = self._chroma_ready_cache
+            if now - ts < self._ready_cache_ttl_s:
+                return result
         try:
-            return await self.retriever.is_ready()
+            result = await self.retriever.is_ready()
         except Exception:
             self.metrics.chroma_errors += 1
-            return False
+            result = False
+        self._chroma_ready_cache = (result, now)
+        return result
 
     async def rag_ready(self) -> bool:
         llm_ready, chroma_ready = await asyncio.gather(self.llm_ready(), self.chroma_ready())

@@ -1,10 +1,13 @@
 """
-Integration load test — requires Docker stack to be running.
-Run manually with: python tests/integration_load_test.py
-Do NOT run with pytest — needs live Ollama + ChromaDB + workers.
+Integration load test - requires Docker stack to be running.
+Run manually with: python tests/integration_load_test.py [--requests N] [--concurrency C]
+Do NOT run with pytest - needs live Ollama + ChromaDB + workers.
+
+Full pipeline: Client → LB (8080) → Master (9000) → Workers → Ollama
 """
 import asyncio
 import aiohttp
+import argparse
 import time
 import random
 
@@ -19,79 +22,155 @@ PROMPTS = [
     "How does Paxos work?",
     "What is eventual consistency?",
     "Explain sharding in distributed databases.",
+    "What is two-phase commit?",
+    "Describe the Raft consensus algorithm.",
+    "How does vector clocks work in distributed systems?",
+    "What is the difference between strong and eventual consistency?",
+    "Explain the concept of quorum in distributed systems.",
 ]
 
 LB_URL = "http://localhost:8080/request"
 
-async def send_task(session, task_id, wall_start):
+
+async def send_request(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
+                       request_id: int, counters: dict, timeout_s: int) -> dict:
     payload = {
+        "request_id": f"load-test-{request_id:05d}",
         "prompt": random.choice(PROMPTS),
         "use_rag": random.choice([True, False]),
     }
     start = time.perf_counter()
-    try:
-        async with session.post(
-            LB_URL,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=150)
-        ) as resp:
-            result = await resp.json()
+    async with semaphore:
+        try:
+            async with session.post(
+                LB_URL,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout_s),
+            ) as resp:
+                result = await resp.json()
+                elapsed = time.perf_counter() - start
+                status = result.get("status", "unknown")
+                worker = result.get("worker_id", "?")
+                rag_info = result.get("rag") or {}
+                rag_used = rag_info.get("used", False) if isinstance(rag_info, dict) else False
+
+                success = status == "completed"
+                counters["completed"] += 1
+                if success:
+                    counters["success"] += 1
+                    counters["latencies"].append(elapsed)
+                    counters["workers"][worker] = counters["workers"].get(worker, 0) + 1
+                else:
+                    counters["failed"] += 1
+
+                _print_progress(counters)
+                return {"success": success, "latency": elapsed, "worker": worker}
+
+        except asyncio.TimeoutError:
             elapsed = time.perf_counter() - start
-            status = result.get("status", "unknown")
-            worker = result.get("worker_id", "?")
-            rag = result.get("rag", {}).get("used", False)
-            print(f"  Task {task_id:03d} → {worker} | {elapsed:.1f}s | {status} | rag={rag}")
-            return {"success": status == "completed", "latency": elapsed, "worker": worker}
-    except Exception as e:
-        elapsed = time.perf_counter() - start
-        print(f"  Task {task_id:03d} → FAILED | {elapsed:.1f}s | {e}")
-        return {"success": False, "latency": elapsed, "worker": "none"}
+            counters["completed"] += 1
+            counters["failed"] += 1
+            _print_progress(counters)
+            return {"success": False, "latency": elapsed, "worker": "timeout"}
+
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            counters["completed"] += 1
+            counters["failed"] += 1
+            _print_progress(counters)
+            return {"success": False, "latency": elapsed, "worker": f"error:{type(exc).__name__}"}
 
 
-async def main():
-    NUM_REQUESTS = 30  # 3 per worker — change to 30 for a longer test
+def _print_progress(counters: dict) -> None:
+    completed = counters["completed"]
+    total = counters["total"]
+    if completed % 50 == 0 or completed == total:
+        pct = 100 * completed / total
+        elapsed = time.monotonic() - counters["wall_start"]
+        rps = completed / elapsed if elapsed > 0 else 0
+        print(
+            f"  [{completed:4d}/{total}] {pct:5.1f}% | "
+            f"OK={counters['success']} FAIL={counters['failed']} | "
+            f"{rps:.2f} req/s | {elapsed:.0f}s elapsed"
+        )
 
-    print(f"\nSending {NUM_REQUESTS} requests through the full pipeline...")
-    print(f"Route: Client → Load Balancer → Master → Workers → Ollama")
-    print(f"{'='*60}")
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="LLM cluster integration load test")
+    parser.add_argument("--requests",    type=int, default=1000, help="Total requests to send")
+    parser.add_argument("--concurrency", type=int, default=10,   help="Max simultaneous in-flight requests")
+    parser.add_argument("--timeout",     type=int, default=300,  help="Per-request timeout in seconds")
+    args = parser.parse_args()
+
+    NUM_REQUESTS = args.requests
+    MAX_CONCURRENCY = args.concurrency
+    TIMEOUT_S = args.timeout
+
+    print(f"\n{'='*65}")
+    print(f"  LLM Distributed System - Integration Load Test")
+    print(f"{'='*65}")
+    print(f"  Requests    : {NUM_REQUESTS}")
+    print(f"  Concurrency : {MAX_CONCURRENCY} simultaneous in-flight")
+    print(f"  Timeout     : {TIMEOUT_S}s per request")
+    print(f"  Route       : Client -> LB:8080 -> Master:9000 -> Workers -> Ollama")
+    print(f"{'='*65}\n")
+
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    counters: dict = {
+        "completed": 0,
+        "success": 0,
+        "failed": 0,
+        "latencies": [],
+        "workers": {},
+        "total": NUM_REQUESTS,
+        "wall_start": time.monotonic(),
+    }
 
     wall_start = time.perf_counter()
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [send_task(session, i, wall_start) for i in range(NUM_REQUESTS)]
-        results = await asyncio.gather(*tasks)
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        coros = [
+            send_request(session, semaphore, i, counters, TIMEOUT_S)
+            for i in range(NUM_REQUESTS)
+        ]
+        await asyncio.gather(*coros)
 
     wall_time = time.perf_counter() - wall_start
-    successes = [r for r in results if r["success"]]
-    failures = [r for r in results if not r["success"]]
-    latencies = [r["latency"] for r in successes]
-    avg_latency = sum(latencies) / len(latencies) if latencies else 0
+    latencies = sorted(counters["latencies"])
+    n = len(latencies)
 
-    # Count per worker
-    worker_counts = {}
-    for r in results:
-        w = r["worker"]
-        worker_counts[w] = worker_counts.get(w, 0) + 1
+    def pct(p: float) -> float:
+        return latencies[min(int(n * p), n - 1)] if n > 0 else 0.0
 
-    print(f"\n{'='*60}")
-    print(f"  LOAD TEST RESULTS — FULL PIPELINE")
-    print(f"{'='*60}")
+    print(f"\n{'='*65}")
+    print(f"  LOAD TEST RESULTS - FULL PIPELINE")
+    print(f"{'='*65}")
     print(f"  Total requests      : {NUM_REQUESTS}")
-    print(f"  Successful          : {len(successes)}")
-    print(f"  Failed              : {len(failures)}")
-    print(f"  Success rate        : {100 * len(successes) / NUM_REQUESTS:.1f}%")
-    print(f"  Wall-clock time     : {wall_time:.1f}s")
-    print(f"  Avg latency         : {avg_latency:.1f}s")
+    print(f"  Successful          : {counters['success']}")
+    print(f"  Failed              : {counters['failed']}")
+    print(f"  Success rate        : {100 * counters['success'] / NUM_REQUESTS:.1f}%")
+    print(f"  Wall-clock time     : {wall_time:.1f}s  ({wall_time / 60:.1f} min)")
     print(f"  Throughput          : {NUM_REQUESTS / wall_time:.3f} req/s")
-    print(f"{'='*60}")
+    if n > 0:
+        avg = sum(latencies) / n
+        print(f"  Avg latency         : {avg:.1f}s")
+        print(f"  P50 latency         : {pct(0.50):.1f}s")
+        print(f"  P95 latency         : {pct(0.95):.1f}s")
+        print(f"  P99 latency         : {pct(0.99):.1f}s")
+        print(f"  Min latency         : {latencies[0]:.1f}s")
+        print(f"  Max latency         : {latencies[-1]:.1f}s")
+    print(f"{'='*65}")
     print(f"  Requests per worker :")
-    for worker, count in sorted(worker_counts.items()):
-        print(f"    {worker}: {count} requests")
-    print(f"{'='*60}")
-    print(f"\n  Extrapolated for 1000 requests:")
-    est_minutes = (1000 / NUM_REQUESTS) * wall_time / 60
-    print(f"  Estimated time      : {est_minutes:.1f} minutes")
-    print(f"{'='*60}\n")
+    for worker, count in sorted(counters["workers"].items(), key=lambda x: -x[1]):
+        bar = "#" * min(count, 40)
+        print(f"    {worker:12s} : {count:4d}  {bar}")
+    print(f"{'='*65}")
+    if n > 0:
+        est_1000_min = (1000 / NUM_REQUESTS) * wall_time / 60
+        print(f"\n  Extrapolated for 1000 requests : ~{est_1000_min:.1f} min")
+    print(f"{'='*65}\n")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

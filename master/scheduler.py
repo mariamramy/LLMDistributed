@@ -57,7 +57,6 @@ class MasterScheduler:
         task.assigned_worker = worker.worker_id
         task.started_at = time.time()
         self._store.update(task)
-        self._registry.update_task_count(worker.worker_id, +1)
         worker.total_tasks += 1
 
         try:
@@ -176,8 +175,11 @@ class MasterScheduler:
                         self._queue.get(), timeout=1.0
                     )
 
+                    # Increment BEFORE create_task so the next loop
+                    # iteration's get_best_worker() sees the updated counter.
+                    self._registry.update_task_count(worker.worker_id, +1)
                     asyncio.create_task(
-                    self._dispatch_to_worker(session, worker, task)
+                        self._dispatch_to_worker(session, worker, task)
                     )
                 except asyncio.TimeoutError:
                     pass  # Queue was empty, loop again
