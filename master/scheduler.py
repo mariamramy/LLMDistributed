@@ -19,7 +19,7 @@ class MasterScheduler:
         port: int = 9000,
         dispatch_interval: float = DISPATCH_INTERVAL,
         heartbeat_check_interval: float = HEARTBEAT_INTERVAL,
-        forward_timeout_s: int = 120,
+        forward_timeout_s: int = 250,
     ):
         self.host = host
         self.port = port

@@ -9,3 +9,4 @@ htmlcov/
 .coverage
 chroma-data/
 pdfs/
+*.log

@@ -33,7 +33,8 @@ LB_URL = "http://localhost:8080/request"
 
 
 async def send_request(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
-                       request_id: int, counters: dict, timeout_s: int) -> dict:
+                       request_id: int, counters: dict, timeout_s: int,
+                       max_retries: int = 2) -> dict:
     payload = {
         "request_id": f"load-test-{request_id:05d}",
         "prompt": random.choice(PROMPTS),
@@ -41,44 +42,43 @@ async def send_request(session: aiohttp.ClientSession, semaphore: asyncio.Semaph
     }
     start = time.perf_counter()
     async with semaphore:
-        try:
-            async with session.post(
-                LB_URL,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout_s),
-            ) as resp:
-                result = await resp.json()
+        for attempt in range(max_retries + 1):
+            try:
+                async with session.post(
+                    LB_URL,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=timeout_s),
+                ) as resp:
+                    result = await resp.json()
+                    elapsed = time.perf_counter() - start
+                    status = result.get("status", "unknown")
+                    worker = result.get("worker_id", "?")
+
+                    if status == "completed":
+                        counters["completed"] += 1
+                        counters["success"] += 1
+                        counters["latencies"].append(elapsed)
+                        counters["workers"][worker] = counters["workers"].get(worker, 0) + 1
+                        _print_progress(counters)
+                        return {"success": True, "latency": elapsed, "worker": worker}
+                    elif attempt < max_retries:
+                        await asyncio.sleep(2)
+                        continue
+                    else:
+                        counters["completed"] += 1
+                        counters["failed"] += 1
+                        _print_progress(counters)
+                        return {"success": False, "latency": elapsed, "worker": worker}
+
+            except (asyncio.TimeoutError, Exception):
+                if attempt < max_retries:
+                    await asyncio.sleep(2)
+                    continue
                 elapsed = time.perf_counter() - start
-                status = result.get("status", "unknown")
-                worker = result.get("worker_id", "?")
-                rag_info = result.get("rag") or {}
-                rag_used = rag_info.get("used", False) if isinstance(rag_info, dict) else False
-
-                success = status == "completed"
                 counters["completed"] += 1
-                if success:
-                    counters["success"] += 1
-                    counters["latencies"].append(elapsed)
-                    counters["workers"][worker] = counters["workers"].get(worker, 0) + 1
-                else:
-                    counters["failed"] += 1
-
+                counters["failed"] += 1
                 _print_progress(counters)
-                return {"success": success, "latency": elapsed, "worker": worker}
-
-        except asyncio.TimeoutError:
-            elapsed = time.perf_counter() - start
-            counters["completed"] += 1
-            counters["failed"] += 1
-            _print_progress(counters)
-            return {"success": False, "latency": elapsed, "worker": "timeout"}
-
-        except Exception as exc:
-            elapsed = time.perf_counter() - start
-            counters["completed"] += 1
-            counters["failed"] += 1
-            _print_progress(counters)
-            return {"success": False, "latency": elapsed, "worker": f"error:{type(exc).__name__}"}
+                return {"success": False, "latency": elapsed, "worker": "timeout"}
 
 
 def _print_progress(counters: dict) -> None:

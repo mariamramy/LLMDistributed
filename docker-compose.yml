@@ -16,72 +16,31 @@ x-app: &app
     RAG_TOP_K: ${RAG_TOP_K:-3}
     RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-500}
     RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-75}
-    WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-1}
+    WORKER_MAX_CONCURRENCY: ${WORKER_MAX_CONCURRENCY:-2}
     HEARTBEAT_INTERVAL_S: ${HEARTBEAT_INTERVAL_S:-5}
-    MASTER_URL: ${MASTER_URL:-}
+    MASTER_URL: ${MASTER_URL:-http://scheduler:9000}
   networks:
     - llmnet
 
 services:
-  main:
-    <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import main as m
-        print("main.py container ready")
-        time.sleep(10**9)
-
-  client:
-    <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import client.load_generator as m
-        print("client/load_generator.py container ready")
-        time.sleep(10**9)
 
   scheduler:
     <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import master.scheduler as m
-        print("master/scheduler.py container ready")
-        time.sleep(10**9)
+    command: ["python", "-m", "master.scheduler"]
+    ports:
+      - "9000:9000"
 
   load_balancer:
     <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import lb.load_balancer as m
-        print("lb/load_balancer.py container ready")
-        time.sleep(10**9)
-
-  common:
-    <<: *app
-    command:
-      - python
-      - -u
-      - -c
-      - |
-        import time
-        import common.models as m
-        print("common/models.py container ready")
-        time.sleep(10**9)
+    command: ["python", "-m", "lb.load_balancer"]
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *app-env
+      LB_FORWARD_TIMEOUT_S: "250"
+    depends_on:
+      scheduler:
+        condition: service_started
 
   chromadb:
     image: chromadb/chroma:1.5.3
@@ -110,6 +69,16 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_FLASH_ATTENTION: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
@@ -203,6 +172,44 @@ services:
       chromadb:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      rag_ingest:
+        condition: service_completed_successfully
+
+  worker-4:
+    <<: *app
+    command: ["python", "-m", "workers.gpu_workers"]
+    ports:
+      - "9104:9100"
+    environment:
+      <<: *app-env
+      WORKER_ID: worker-4
+      WORKER_PORT: "9100"
+      WORKER_ADVERTISE_HOST: worker-4
+      OLLAMA_BASE_URL: https://j28llglf-11434.thundercompute.net
+      OLLAMA_SSL_VERIFY: "false"
+      WORKER_MAX_CONCURRENCY: "4"
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      rag_ingest:
+        condition: service_completed_successfully
+
+  worker-5:
+    <<: *app
+    command: ["python", "-m", "workers.gpu_workers"]
+    ports:
+      - "9105:9100"
+    environment:
+      <<: *app-env
+      WORKER_ID: worker-5
+      WORKER_PORT: "9100"
+      WORKER_ADVERTISE_HOST: worker-5
+      OLLAMA_BASE_URL: https://j28llglf-11434.thundercompute.net
+      OLLAMA_SSL_VERIFY: "false"
+      WORKER_MAX_CONCURRENCY: "4"
+    depends_on:
+      chromadb:
         condition: service_healthy
       rag_ingest:
         condition: service_completed_successfully

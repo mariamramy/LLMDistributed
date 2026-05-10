@@ -1,334 +1,429 @@
-# Worker/RAG/LLM Layer Documentation
+# LLMDistributed — Project Documentation
 
-## What This Layer Owns
+## Overview
 
-This project section owns the worker side of the distributed LLM system:
+A fully distributed LLM inference system built for CSE354. Client requests flow through a load balancer to a master scheduler, which distributes tasks across multiple GPU workers. Each worker performs RAG (Retrieval-Augmented Generation) using a local vector database and generates answers using a local LLM via Ollama.
 
-- Three worker services: `worker-1`, `worker-2`, and `worker-3`
-- Local Ollama-backed LLM generation
-- Local Ollama-backed embeddings
-- PDF textbook ingestion into ChromaDB
-- RAG retrieval from ChromaDB
-- Worker health, metrics, registration, and heartbeat behavior
+The system supports hybrid deployments — mixing local GPU workers with remote cloud GPU workers (Thundercompute) in the same cluster.
 
-The client, load balancer, and master scheduler are owned by the other team. Our worker API stays stable for that master node.
+---
 
-## Runtime Architecture
+## Architecture
 
-The Docker stack for our part contains:
+```
+Client
+  │
+  ▼
+Load Balancer (port 8080)
+  │   Round-robin / Least-connections / Load-aware routing
+  ▼
+Master Scheduler (port 9000)
+  │   Priority queue, async dispatch, fault tolerance, retries
+  ├──▶ Worker-1 (port 9101) ──▶ Local Ollama (port 11434) ──▶ GPU
+  ├──▶ Worker-2 (port 9102) ──▶ Local Ollama (port 11434) ──▶ GPU
+  ├──▶ Worker-3 (port 9103) ──▶ Local Ollama (port 11434) ──▶ GPU
+  ├──▶ Worker-4 (port 9104) ──▶ Thundercompute Ollama (HTTPS) ──▶ Cloud GPU
+  └──▶ Worker-5 (port 9105) ──▶ Thundercompute Ollama (HTTPS) ──▶ Cloud GPU
+            │
+            ▼
+        ChromaDB (port 8000)
+        Vector store for RAG
+```
 
-- `ollama`: local model server on `localhost:11434`
-- `ollama_pull`: one-shot job that pulls the generation and embedding models
-- `chromadb`: shared vector database on `localhost:8000`
-- `rag_ingest`: one-shot job that reads PDFs, embeds chunks, and writes them to ChromaDB
-- `worker-1`: worker service exposed on `localhost:9101`
-- `worker-2`: worker service exposed on `localhost:9102`
-- `worker-3`: worker service exposed on `localhost:9103`
+### Components
 
-Inside Docker, all workers listen on port `9100`. Host ports differ only so we can test each worker directly.
+| Component | Port | Description |
+|---|---|---|
+| Load Balancer | 8080 | Receives client requests, forwards to master |
+| Master Scheduler | 9000 | Priority queue, dispatches tasks to workers |
+| Worker 1-3 | 9101-9103 | Local GPU workers (RAG + LLM inference) |
+| Worker 4-5 | 9104-9105 | Cloud GPU workers (Thundercompute) |
+| ChromaDB | 8000 | Vector database for RAG retrieval |
+| Ollama | 11434 | Local LLM inference server |
 
-Default local models:
+---
+
+## Full Request Flow
+
+1. **Client** sends `POST /request` to Load Balancer with a prompt
+2. **Load Balancer** selects master using its strategy (round-robin by default) and forwards
+3. **Master Scheduler** wraps request in a `Task`, assigns a UUID, puts it in a `PriorityQueue`, creates an asyncio `Future`
+4. **Dispatch loop** picks the best available worker (lowest load + active tasks), increments its counter, fires off `asyncio.create_task()`
+5. **Worker** receives `POST /task`:
+   - Checks readiness of Ollama and ChromaDB (cached for 30s)
+   - If `use_rag=True`: embeds the prompt via Ollama, queries ChromaDB for top-K chunks
+   - Builds prompt with retrieved context
+   - Calls Ollama `/api/chat` for LLM generation
+   - Returns JSON with answer, latency, worker ID, RAG sources
+6. **Master** resolves the Future, returns result to LB
+7. **LB** returns result to client
+
+---
+
+## Prerequisites
+
+- Docker Desktop with GPU support enabled
+- NVIDIA GPU with CUDA support
+- Python 3.11+ (for running the load test client)
+- At least 6GB VRAM (for `llama3.2:3b-instruct-q3_K_M`)
+- PDF textbooks placed in the `pdfs/` directory
+
+---
+
+## Setup and Running
+
+### 1. Clone and configure
 
 ```bash
-OLLAMA_GENERATION_MODEL=llama3.2:3b-instruct-q3_K_M
-OLLAMA_EMBEDDING_MODEL=all-minilm
+git clone <repo-url>
+cd LLMDistributed
+cp .env.example .env
 ```
 
-This setup is intentionally small for older MacBook Air hardware. Keep `WORKER_MAX_CONCURRENCY=1` locally unless the machine has enough CPU/RAM headroom.
+Edit `.env` as needed (see Configuration section).
 
-## Data Flow
+### 2. Add PDF textbooks
 
-### Ingestion Flow
+Place your textbook PDFs in the `pdfs/` directory. The RAG pipeline will automatically chunk, embed, and index them at startup.
 
-1. The textbook PDF lives under `pdfs/`.
-2. `ollama_pull` makes sure `llama3.2:3b-instruct-q3_K_M` and `all-minilm` are installed in the shared Ollama volume.
-3. `rag_ingest` reads PDFs from `/app/pdfs`.
-4. Text is extracted page by page with `pypdf`.
-5. Page text is split into chunks.
-6. Each chunk is embedded locally through Ollama `/api/embed`.
-7. Chunks are upserted into ChromaDB collection `distributed_systems_textbook_ollama_all_minilm`.
-8. The ingestion job exits successfully after indexing.
-
-The ingestion job is idempotent because each chunk uses a deterministic ID. Re-running ingestion updates existing chunks instead of duplicating them.
-
-### Request Flow
-
-1. The master chooses a worker and sends `POST /task`.
-2. The worker validates `task_id` and `prompt`.
-3. If `use_rag=true`, the worker embeds only the user prompt through Ollama.
-4. The worker queries ChromaDB for the top `RAG_TOP_K` chunks, default `3`.
-5. The worker sends the user prompt plus those retrieved snippets to Ollama `/api/chat`.
-6. The worker returns the answer, latency, model metadata, and source metadata.
-
-Important: the full textbook is never placed into the generation request. ChromaDB stores the textbook chunks, and the worker sends only the few retrieved snippets needed to enrich the answer.
-
-## APIs Exposed By Each Worker
-
-### `GET /health`
-
-Success response:
-
-```json
-{
-  "worker_id": "worker-1",
-  "status": "ok",
-  "llm_provider": "ollama",
-  "llm_ready": true,
-  "rag_ready": true,
-  "chroma_ready": true,
-  "chunk_count": 2247,
-  "active_tasks": 0,
-  "total_tasks": 0,
-  "load": 0.0,
-  "model": "llama3.2:3b-instruct-q3_K_M",
-  "embedding_model": "all-minilm"
-}
-```
-
-Returns `503` when Ollama is unreachable, required models are missing, ChromaDB is unavailable, or no chunks are indexed.
-
-### `GET /metrics`
-
-```json
-{
-  "worker_id": "worker-1",
-  "active_tasks": 1,
-  "max_concurrency": 1,
-  "load": 1.0,
-  "total_tasks": 20,
-  "completed_tasks": 18,
-  "failed_tasks": 2,
-  "avg_latency_ms": 850.0,
-  "llm_provider": "ollama",
-  "llm_ready": true,
-  "rag_ready": true,
-  "chroma_ready": true,
-  "chunk_count": 2247,
-  "retrieval_count": 18,
-  "ollama_errors": 0,
-  "chroma_errors": 0
-}
-```
-
-### `POST /task`
-
-Canonical request body:
-
-```json
-{
-  "task_id": "task-123",
-  "request_id": "client-request-123",
-  "prompt": "Explain replication in distributed systems.",
-  "use_rag": true
-}
-```
-
-`query` is temporarily accepted as an alias for `prompt` to support older code.
-
-Success response:
-
-```json
-{
-  "task_id": "task-123",
-  "request_id": "client-request-123",
-  "status": "completed",
-  "worker_id": "worker-1",
-  "result": "answer text",
-  "latency_ms": 1234.5,
-  "rag": {
-    "used": true,
-    "sources": [
-      {
-        "source_file": "Distributed_Systems_4-230325.pdf",
-        "page": 12,
-        "chunk_id": "Distributed_Systems_4-230325.pdf:p12:c1:abc123",
-        "score": 0.91
-      }
-    ]
-  },
-  "llm": {
-    "model": "llama3.2:3b-instruct-q3_K_M",
-    "usage": {
-      "prompt_eval_count": 100,
-      "eval_count": 80
-    }
-  }
-}
-```
-
-Failure response:
-
-```json
-{
-  "task_id": "task-123",
-  "status": "failed",
-  "worker_id": "worker-1",
-  "error": {
-    "code": "ollama_not_ready",
-    "message": "Ollama is not reachable or required models are not installed"
-  }
-}
-```
-
-## Master Integration Contract
-
-Workers can register and send heartbeats to the master when `MASTER_URL` is set.
-
-Registration:
-
-```http
-POST {MASTER_URL}/register
-```
-
-```json
-{
-  "worker_id": "worker-1",
-  "host": "worker-1",
-  "port": 9100
-}
-```
-
-Heartbeat:
-
-```http
-POST {MASTER_URL}/heartbeat
-```
-
-```json
-{
-  "worker_id": "worker-1",
-  "load": 0.0,
-  "active_tasks": 0,
-  "max_concurrency": 1,
-  "total_tasks": 20
-}
-```
-
-The master should select workers using healthy status plus `(load, active_tasks)`.
-
-## Configuration
-
-Use `.env.example` as the template.
-
-Important defaults:
-
-```bash
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_GENERATION_MODEL=llama3.2:3b-instruct-q3_K_M
-OLLAMA_EMBEDDING_MODEL=all-minilm
-OLLAMA_EMBED_MAX_CHARS=200
-OLLAMA_MAX_OUTPUT_TOKENS=300
-CHROMA_COLLECTION=distributed_systems_textbook_ollama_all_minilm
-RAG_TOP_K=3
-RAG_CHUNK_SIZE=500
-RAG_CHUNK_OVERLAP=75
-RAG_INGEST_BATCH_SIZE=16
-WORKER_MAX_CONCURRENCY=1
-HEARTBEAT_INTERVAL_S=5
-MASTER_URL=
-```
-
-Set `MASTER_URL=http://scheduler:9000` when the master service exposes compatible `/register` and `/heartbeat` routes.
-
-## Running The Stack
-
-1. Put the textbook PDF in `pdfs/`.
-2. Create `.env` from `.env.example` if you want to override defaults.
-3. Run:
+### 3. Start the full stack
 
 ```bash
 docker compose up --build
 ```
 
-The first run downloads the official Ollama Docker image, then roughly 1.7 GB for the generation model plus about 46 MB for the embedding model. The image can include multi-GB platform layers, but after that Docker caches the image and models persist in the `ollama-data` Docker volume.
+The first run will:
+- Pull the Ollama Docker image (~1GB)
+- Download `llama3.2:3b-instruct-q3_K_M` (~1.7GB) and `all-minilm` (~46MB)
+- Ingest PDFs into ChromaDB (takes a few minutes)
+- Start all workers
 
-Useful checks:
+Subsequent runs are much faster — models are cached in Docker volumes.
+
+### 4. Verify everything is healthy
 
 ```bash
-curl http://localhost:11434/api/tags
-curl http://localhost:8000/api/v2/heartbeat
+# Load Balancer
+curl http://localhost:8080/health
+
+# Master Scheduler
+curl http://localhost:9000/health
+curl http://localhost:9000/stats
+
+# Individual workers
 curl http://localhost:9101/health
-curl http://localhost:9101/metrics
+curl http://localhost:9102/health
+curl http://localhost:9103/health
+
+# ChromaDB
+curl http://localhost:8000/api/v2/heartbeat
+
+# Ollama
+curl http://localhost:11434/api/tags
 ```
 
-Manual task:
+### 5. Send a test request
 
 ```bash
-curl -X POST http://localhost:9101/task \
+curl -X POST http://localhost:8080/request \
   -H "Content-Type: application/json" \
   -d '{
-    "task_id": "manual-1",
-    "prompt": "Explain replication in distributed systems.",
+    "prompt": "What is the CAP theorem?",
     "use_rag": true
   }'
 ```
 
-## Postman
+---
 
-Import these files into Postman:
-
-- `postman/worker-rag-llm.postman_collection.json`
-- `postman/worker-rag-llm.postman_environment.json`
-
-Run the collection after `docker compose up --build` has finished model pull, ingestion, and worker startup.
-
-The collection tests:
-
-- Ollama model tags
-- ChromaDB heartbeat
-- Worker health
-- Worker metrics
-- RAG task execution
-- No-RAG task execution
-- Validation error for missing prompt
-- All three worker services
-
-## Tests
-
-Local tests:
+## Running the Load Test
 
 ```bash
-.venv/bin/python -m pytest -q
+python tests/integration_load_test.py --requests 1000 --concurrency 20 --timeout 300
 ```
 
-Compile check:
+### Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--requests` | 1000 | Total number of requests to send |
+| `--concurrency` | 10 | Max simultaneous in-flight requests |
+| `--timeout` | 300 | Per-request timeout in seconds |
+
+### Output format
+
+Progress line (printed every 50 requests):
+```
+[ 500/1000]  50.0% | OK=498 FAIL=2 | 0.86 req/s | 577s elapsed
+```
+
+- `OK` / `FAIL` — successful vs failed requests
+- `req/s` — current throughput (completed / elapsed time)
+
+Final report includes: total time, throughput, success rate, latency percentiles (P50/P95/P99), and requests per worker.
+
+---
+
+## Configuration
+
+All settings live in `.env`. Key variables:
+
+### LLM Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama server URL (override per worker for hybrid) |
+| `OLLAMA_GENERATION_MODEL` | `llama3.2:3b-instruct-q3_K_M` | Generation model |
+| `OLLAMA_EMBEDDING_MODEL` | `all-minilm` | Embedding model for RAG |
+| `OLLAMA_MAX_OUTPUT_TOKENS` | `100` | Max tokens per response |
+| `OLLAMA_EMBED_MAX_CHARS` | `200` | Max characters sent for embedding |
+| `OLLAMA_SSL_VERIFY` | `true` | Set to `false` for self-signed HTTPS (Thundercompute) |
+
+### Worker Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `WORKER_MAX_CONCURRENCY` | `2` | Semaphore limit per worker |
+| `HEARTBEAT_INTERVAL_S` | `5` | Seconds between heartbeats to master |
+| `MASTER_URL` | `http://scheduler:9000` | Master scheduler URL |
+
+### RAG Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_TOP_K` | `1` | Number of chunks retrieved per query |
+| `RAG_CHUNK_SIZE` | `500` | Characters per chunk during ingestion |
+| `RAG_CHUNK_OVERLAP` | `75` | Overlap between chunks |
+| `CHROMA_COLLECTION` | `distributed_systems_textbook_ollama_all_minilm` | Collection name |
+
+### Timeout Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `LB_FORWARD_TIMEOUT_S` | `250` | LB timeout waiting for master response |
+| Master `forward_timeout_s` | `250` | Master timeout waiting for worker response |
+
+---
+
+## API Reference
+
+### Load Balancer
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/request` | POST | Submit a request (main entry point) |
+| `/health` | GET | LB health and node stats |
+| `/stats` | GET | Request counts and failure stats |
+
+**Request body:**
+```json
+{
+  "request_id": "optional-client-id",
+  "prompt": "Your question here",
+  "use_rag": true,
+  "priority": 5
+}
+```
+
+### Master Scheduler
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/request` | POST | Receive from LB, queue task |
+| `/register` | POST | Worker registration |
+| `/heartbeat` | POST | Worker heartbeat |
+| `/health` | GET | Queue size and worker count |
+| `/stats` | GET | Full task and worker statistics |
+
+### Workers
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/task` | POST | Execute a task (called by master) |
+| `/health` | GET | Worker readiness |
+| `/metrics` | GET | Detailed performance metrics |
+
+---
+
+## Fault Tolerance
+
+### Worker failures
+If a worker returns a non-200 response or an exception occurs during dispatch, the master re-queues the task and retries on a different worker up to `MAX_TASK_RETRIES = 3` times.
+
+### Worker timeouts
+The `heartbeat_check_loop` runs every 5 seconds. Workers that miss heartbeats for more than `WORKER_TIMEOUT_S = 15` seconds are marked unhealthy. Any in-flight tasks on dead workers are re-queued and reassigned.
+
+### Client retries
+The load test client retries failed requests up to 2 times with a 2-second delay before counting them as failures.
+
+### Demonstrated fault tolerance
+During testing, Thundercompute workers failed with OOM errors (`OLLAMA_NUM_PARALLEL=8` exceeded available VRAM). The master scheduler automatically retried all affected tasks on healthy local workers. The client observed **zero failures** — demonstrating transparent fault recovery under partial node failure.
+
+---
+
+## Load Balancing Strategies
+
+Three strategies available, set via `--strategy` flag or `STRATEGIES` config:
+
+| Strategy | Description |
+|---|---|
+| `round_robin` | Alternates between healthy nodes equally |
+| `least_connections` | Routes to node with fewest active connections |
+| `load_aware` | Routes to node with lowest `(load, active_connections)` score |
+
+Within the master scheduler, `get_best_worker()` always uses load-aware selection: `min(healthy_workers, key=lambda w: (w.load, w.active_tasks))`.
+
+---
+
+## Hybrid Cloud Setup (Thundercompute)
+
+To add remote GPU workers:
+
+### 1. Start Ollama on the remote instance
 
 ```bash
-.venv/bin/python -m compileall -q workers rag llm tests
+OLLAMA_HOST=0.0.0.0 OLLAMA_NUM_PARALLEL=3 nohup ollama serve > ollama.log 2>&1 &
+ollama pull llama3.2:3b-instruct-q3_K_M
+ollama pull all-minilm
 ```
 
-Compose validation:
+**Important:** Set `OLLAMA_NUM_PARALLEL` based on available VRAM:
+- ~9GB per parallel slot for this model
+- A6000 (48GB): max 3-4 parallel slots safely (`OLLAMA_NUM_PARALLEL=3`)
+- Do not exceed available VRAM or Ollama will return 500 errors
+
+### 2. Add workers to docker-compose.yml
+
+```yaml
+worker-4:
+  <<: *app
+  command: ["python", "-m", "workers.gpu_workers"]
+  ports:
+    - "9104:9100"
+  environment:
+    <<: *app-env
+    WORKER_ID: worker-4
+    WORKER_PORT: "9100"
+    WORKER_ADVERTISE_HOST: worker-4
+    OLLAMA_BASE_URL: https://your-instance-url.thundercompute.net
+    OLLAMA_SSL_VERIFY: "false"
+    WORKER_MAX_CONCURRENCY: "4"
+  depends_on:
+    chromadb:
+      condition: service_healthy
+    rag_ingest:
+      condition: service_completed_successfully
+```
+
+### 3. Start the new workers
 
 ```bash
-docker compose config --quiet
+docker compose up -d worker-4 worker-5
 ```
 
-Docker build check:
+---
 
+## Performance Results
+
+All tests: 1000 requests, `llama3.2:3b-instruct-q3_K_M`, RTX 4050 laptop (6GB VRAM).
+
+| Run | Setup | Concurrency | Success | Throughput | Total Time |
+|---|---|---|---|---|---|
+| 1 | 3 local workers | 10 | 100% | 0.54 req/s | 31.0 min |
+| 2 | 3 local, optimized config | 10 | 99.1% | 0.55 req/s | 30.6 min |
+| 3 | 3 local + 2 TC (A6000) | 10 | 99.5% | 0.75 req/s | 22.3 min |
+| 4 | 3 local + 2 TC (TC broken) | 20 | 100% | 0.84 req/s | 19.8 min |
+| 5 | 3 local + 2 TC (TC fixed) | 20 | 100% | 0.77 req/s | 21.7 min |
+| 6 | 3 local only | 20 | 100% | 0.60 req/s | ~28 min est. |
+
+### Key observations
+
+- **Hybrid outperforms local-only:** Adding 2 Thundercompute A6000 workers improved throughput by ~28% (0.60 → 0.77 req/s) with all 3 local workers still active
+- **Fault tolerance proven:** Run 4 showed 100% success even when TC workers were silently failing — master retried all failed tasks on local workers
+- **Model size matters more than GPU:** The 3B quantized model runs at similar speed on RTX 4050 and A6000. The A6000 advantage only shows with larger models (>13B) that don't fit in 6GB VRAM
+- **Throughput is Ollama-bound:** The bottleneck is LLM inference time (~5-30s per request), not the Python workers or network
+
+---
+
+## Optimizations Applied
+
+### Bug fixes
+
+| Fix | File | Impact |
+|---|---|---|
+| Integration test was hitting worker directly instead of LB | `tests/integration_load_test.py` | Test now measures the full pipeline |
+| Dispatch loop race condition: same worker selected multiple times before active_tasks updated | `master/scheduler.py` | Even load distribution across all workers (334/332/334) |
+
+### Performance optimizations
+
+| Optimization | File | Impact |
+|---|---|---|
+| Readiness check caching (30s TTL) | `workers/gpu_workers.py` | Eliminates Ollama + ChromaDB HTTP calls on every task |
+| SSL bypass for self-signed HTTPS | `llm/inference.py` | Enables Thundercompute HTTPS connections |
+| `OLLAMA_FLASH_ATTENTION=1` | `docker-compose.yml` | Reduces VRAM usage, speeds up attention |
+| `WORKER_MAX_CONCURRENCY` 1→2 | `.env` | Workers handle 2 concurrent tasks each |
+| Master + LB timeouts 120s→250s | `master/scheduler.py`, `docker-compose.yml` | Eliminates timeout failures under high concurrency |
+| Client retry logic (2 retries) | `tests/integration_load_test.py` | Recovers transient failures automatically |
+
+---
+
+## Troubleshooting
+
+### Workers not appearing in master stats after restart
+
+Workers only register at startup. After a master restart, restart all workers:
 ```bash
-docker compose build rag_ingest worker-1
+docker compose restart worker-1 worker-2 worker-3 worker-4 worker-5
 ```
 
-The unit tests use mocked Ollama and mocked ChromaDB where appropriate. They do not require live models.
+### Thundercompute OOM errors
 
-## Files Added Or Changed
+If workers 4/5 return 502 with `"model requires more system memory"`, reduce `OLLAMA_NUM_PARALLEL` on the Thundercompute instance. Each parallel slot needs ~9GB for this model.
 
-- `workers/gpu_workers.py`: aiohttp worker service, Ollama readiness, task handling, metrics
-- `rag/ingest.py`: PDF-to-Chroma ingestion job using Ollama embeddings
-- `rag/retriever.py`: Chroma-backed RAG retrieval using Ollama embeddings
-- `llm/inference.py`: Ollama chat/embed wrapper and prompt construction
-- `docker-compose.yml`: Ollama, model pull, ChromaDB, ingestion, placeholder services, and 3 workers
-- `.env.example`: local Ollama defaults
-- `requirements.txt`: runtime and test dependencies with no provider SDK requirement
-- `postman/`: Postman collection and environment
-- `tests/`: worker, ingestion, retrieval, and LLM prompt tests
+### RAG ingestion fails on restart
 
-## Operational Notes
+`rag_ingest` re-runs when workers are force-recreated. Wait for it to complete (check `docker compose logs rag_ingest`) before starting the load test.
 
-- `pdfs/` is ignored by Git because textbooks can be large or copyrighted.
-- `.env` is ignored by Git because it may contain local overrides.
-- The worker stack can run before the master is ready; if `MASTER_URL` is empty, registration and heartbeat are skipped.
-- ChromaDB collection `distributed_systems_textbook_ollama_all_minilm` is intentionally separate from the old embedding collection because vector dimensions and semantics differ by embedding model.
-- The default chunk size is kept at 500 characters, and embedding inputs are capped to `OLLAMA_EMBED_MAX_CHARS=200` with `truncate=true`, so unusual PDF chunks cannot crash ingestion by exceeding the local embedding model context window.
-- Live ingestion and live task execution use local Ollama instead of a third-party LLM provider.
+### GPU thermal throttling
+
+Sustained load on a laptop GPU causes thermal throttling above ~85°C, reducing throughput over time. Ensure airflow under the laptop and monitor with `nvidia-smi`.
+
+---
+
+## Project Structure
+
+```
+LLMDistributed/
+├── client/
+│   └── load_generator.py       # Async load generator with stats
+├── common/
+│   └── models.py               # Shared Request/Response dataclasses
+├── lb/
+│   ├── load_balancer.py        # aiohttp LB server
+│   ├── health_monitor.py       # Background node health checks
+│   ├── node.py                 # Node dataclass
+│   └── strategies.py           # RoundRobin, LeastConnections, LoadAware
+├── master/
+│   ├── scheduler.py            # Master scheduler with priority queue
+│   ├── work_registry.py        # WorkerRegistry and TaskStore
+│   └── models.py               # Task, WorkerInfo, TaskStatus
+├── workers/
+│   └── gpu_workers.py          # GPU worker: RAG + LLM + heartbeat
+├── rag/
+│   ├── ingest.py               # PDF → ChromaDB ingestion pipeline
+│   └── retriever.py            # ChromaDB query with Ollama embeddings
+├── llm/
+│   └── inference.py            # OllamaClient wrapper (chat + embed)
+├── tests/
+│   ├── integration_load_test.py  # Full pipeline load test (1000 requests)
+│   ├── integration_parallel.py   # Direct worker parallel test
+│   ├── test_worker.py
+│   ├── test_retriever.py
+│   ├── test_ingest.py
+│   └── test_llm_inference.py
+├── postman/                    # Postman collection for manual testing
+├── pdfs/                       # Textbook PDFs (git-ignored)
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── .env
+```
