@@ -1,10 +1,38 @@
 
 =================================================================
-  Run timestamp       : 2026-05-11 (local-only, 3 workers)
-  Total requests      : 1000
-  Concurrency         : 20
-  Timeout             : 300s
+  LLM Distributed System - Integration Load Test
 =================================================================
+  Requests    : 1000
+  Concurrency : 20 simultaneous in-flight
+  Timeout     : 300s per request
+  Route       : Client -> LB:8080 -> Master:9000 -> Workers -> Ollama
+=================================================================
+
+  [  50/1000]   5.0% | OK=50 FAIL=0 | 0.82 req/s | 61s elapsed
+  [ 100/1000]  10.0% | OK=100 FAIL=0 | 0.82 req/s | 122s elapsed
+  [ 150/1000]  15.0% | OK=150 FAIL=0 | 0.74 req/s | 204s elapsed
+  [ 200/1000]  20.0% | OK=200 FAIL=0 | 0.71 req/s | 283s elapsed
+  [ 250/1000]  25.0% | OK=250 FAIL=0 | 0.69 req/s | 362s elapsed
+  [ 300/1000]  30.0% | OK=300 FAIL=0 | 0.67 req/s | 449s elapsed
+  [ 350/1000]  35.0% | OK=350 FAIL=0 | 0.66 req/s | 527s elapsed
+  [ 400/1000]  40.0% | OK=400 FAIL=0 | 0.67 req/s | 594s elapsed
+  [ 450/1000]  45.0% | OK=450 FAIL=0 | 0.67 req/s | 672s elapsed
+  [ 500/1000]  50.0% | OK=500 FAIL=0 | 0.66 req/s | 758s elapsed
+  [ 550/1000]  55.0% | OK=550 FAIL=0 | 0.66 req/s | 839s elapsed
+  [ 600/1000]  60.0% | OK=600 FAIL=0 | 0.65 req/s | 919s elapsed
+  [ 650/1000]  65.0% | OK=650 FAIL=0 | 0.66 req/s | 988s elapsed
+  [ 700/1000]  70.0% | OK=700 FAIL=0 | 0.65 req/s | 1069s elapsed
+  [ 750/1000]  75.0% | OK=750 FAIL=0 | 0.67 req/s | 1124s elapsed
+  [ 800/1000]  80.0% | OK=800 FAIL=0 | 0.68 req/s | 1178s elapsed
+  [ 850/1000]  85.0% | OK=850 FAIL=0 | 0.68 req/s | 1247s elapsed
+  [ 900/1000]  90.0% | OK=900 FAIL=0 | 0.69 req/s | 1299s elapsed
+  [ 950/1000]  95.0% | OK=950 FAIL=0 | 0.70 req/s | 1355s elapsed
+  [1000/1000] 100.0% | OK=1000 FAIL=0 | 0.68 req/s | 1468s elapsed
+
+=================================================================
+  LOAD TEST RESULTS - FULL PIPELINE
+=================================================================
+  Total requests      : 1000
   Successful          : 1000
   Failed              : 0
   Success rate        : 100.0%
@@ -18,17 +46,12 @@
   Max latency         : 1467.7s
 =================================================================
   Requests per worker :
-    worker-1     :  305
-    worker-3     :  305
-    worker-2     :  302
-    worker-4     :   45
-    worker-5     :   43
+    worker-1     :  305  ########################################
+    worker-3     :  305  ########################################
+    worker-2     :  302  ########################################
+    worker-4     :   45  ########################################
+    worker-5     :   43  ########################################
 =================================================================
 
-  Note: High avg/P50 latency reflects queue wait time accumulated
-  under sustained 1000-request load with 3 active local workers.
-  Min latency (7.8s) represents actual inference time floor.
-  TC workers (4, 5) contributed only 88/1000 requests (8.8%) due
-  to high remote latency causing load-aware scheduler to prefer
-  local workers.
+  Extrapolated for 1000 requests : ~24.5 min
 =================================================================
