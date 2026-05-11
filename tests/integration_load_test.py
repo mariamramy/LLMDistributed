@@ -8,6 +8,7 @@ Full pipeline: Client → LB (8080) → Master (9000) → Workers → Ollama
 import asyncio
 import aiohttp
 import argparse
+import subprocess
 import time
 import random
 import datetime
@@ -99,9 +100,10 @@ def _print_progress(counters: dict) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="LLM cluster integration load test")
-    parser.add_argument("--requests",    type=int, default=1000, help="Total requests to send")
-    parser.add_argument("--concurrency", type=int, default=10,   help="Max simultaneous in-flight requests")
-    parser.add_argument("--timeout",     type=int, default=300,  help="Per-request timeout in seconds")
+    parser.add_argument("--requests",    type=int,            default=1000, help="Total requests to send")
+    parser.add_argument("--concurrency", type=int,            default=10,   help="Max simultaneous in-flight requests")
+    parser.add_argument("--timeout",     type=int,            default=300,  help="Per-request timeout in seconds")
+    parser.add_argument("--monitor-gpu", action="store_true",               help="Capture GPU stats in parallel via gpu_monitor.py")
     args = parser.parse_args()
 
     NUM_REQUESTS = args.requests
@@ -129,6 +131,16 @@ async def main() -> None:
     }
 
     wall_start = time.perf_counter()
+
+    # Launch GPU monitor as a background process if requested
+    gpu_proc = None
+    if args.monitor_gpu:
+        monitor_script = os.path.join(os.path.dirname(__file__), "gpu_monitor.py")
+        gpu_proc = subprocess.Popen(
+            ["python", monitor_script, "--duration", str(TIMEOUT_S + 120), "--interval", "5"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"  GPU monitor started (pid={gpu_proc.pid})\n")
 
     connector = aiohttp.TCPConnector(limit=0)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -172,6 +184,12 @@ async def main() -> None:
         est_1000_min = (1000 / NUM_REQUESTS) * wall_time / 60
         print(f"\n  Estimated time for 1000 requests : ~{est_1000_min:.1f} min")
     print(f"{'='*65}\n")
+
+    # Stop GPU monitor
+    if gpu_proc:
+        gpu_proc.terminate()
+        gpu_proc.wait()
+        print(f"  GPU monitor stopped — stats saved to tests/results/")
 
     _write_results_log(NUM_REQUESTS, MAX_CONCURRENCY, TIMEOUT_S,
                        counters, wall_time, latencies, pct, est_1000_min if n > 0 else None)
