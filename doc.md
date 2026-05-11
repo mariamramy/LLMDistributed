@@ -418,6 +418,9 @@ All tests: 1000 requests, `llama3.2:3b-instruct-q3_K_M`, RTX 4050 laptop (6GB VR
 | 4 | 3 local + 2 TC (TC broken) | 20 | 100% | 0.84 req/s | 19.8 min |
 | 5 | 3 local + 2 TC (TC fixed) | 20 | 100% | 0.77 req/s | 21.7 min |
 | 6 | 3 local only | 20 | 100% | 0.60 req/s | ~28 min est. |
+| 7 | 3 local + 2 TC (TC throttled) | 20 | 100% | 0.68 req/s | 24.5 min |
+
+Worker distribution Run 7: worker-1: 305, worker-2: 302, worker-3: 305, worker-4: 45, worker-5: 43
 
 ### Key observations
 
@@ -425,6 +428,7 @@ All tests: 1000 requests, `llama3.2:3b-instruct-q3_K_M`, RTX 4050 laptop (6GB VR
 - **Fault tolerance proven:** Run 4 showed 100% success even when TC workers were silently failing — master retried all failed tasks on local workers
 - **Model size matters more than GPU:** The 3B quantized model runs at similar speed on RTX 4050 and A6000. The A6000 advantage only shows with larger models (>13B) that don't fit in 6GB VRAM
 - **Throughput is Ollama-bound:** The bottleneck is LLM inference time (~5-30s per request), not the Python workers or network
+- **TC underutilization degrades hybrid performance:** Run 7 shows TC workers handling only 88/1000 requests (8.8%) due to high response latency on the remote instance. The load-aware scheduler routes away from slow workers, collapsing hybrid back toward 3-local performance (~0.60 req/s baseline). TC contribution only improves throughput when TC response times are comparable to local.
 
 ---
 

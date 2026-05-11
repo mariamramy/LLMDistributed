@@ -272,11 +272,12 @@ class MasterScheduler:
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
 
-        worker_id = data.get("worker_id") or str(uuid.uuid4())
-        host      = data.get("host", request.remote)
-        port      = int(data.get("port", 9100))
+        worker_id       = data.get("worker_id") or str(uuid.uuid4())
+        host            = data.get("host", request.remote)
+        port            = int(data.get("port", 9100))
+        priority_weight = float(data.get("priority_weight", 1.0))
 
-        self._registry.register(worker_id, host, port)
+        self._registry.register(worker_id, host, port, priority_weight)
         return web.json_response({"status": "registered", "worker_id": worker_id})
 
     async def handle_heartbeat(self, request: web.Request) -> web.Response:

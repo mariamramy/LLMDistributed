@@ -132,6 +132,8 @@ services:
       WORKER_ID: worker-1
       WORKER_PORT: "9100"
       WORKER_ADVERTISE_HOST: worker-1
+      STUB_MODE: ${STUB_MODE:-false}
+      STUB_DELAY_MS: ${STUB_DELAY_MS:-50}
     depends_on:
       chromadb:
         condition: service_healthy
@@ -150,6 +152,8 @@ services:
       WORKER_ID: worker-2
       WORKER_PORT: "9100"
       WORKER_ADVERTISE_HOST: worker-2
+      STUB_MODE: ${STUB_MODE:-false}
+      STUB_DELAY_MS: ${STUB_DELAY_MS:-50}
     depends_on:
       chromadb:
         condition: service_healthy
@@ -168,6 +172,8 @@ services:
       WORKER_ID: worker-3
       WORKER_PORT: "9100"
       WORKER_ADVERTISE_HOST: worker-3
+      STUB_MODE: ${STUB_MODE:-false}
+      STUB_DELAY_MS: ${STUB_DELAY_MS:-50}
     depends_on:
       chromadb:
         condition: service_healthy
@@ -186,7 +192,7 @@ services:
       WORKER_ID: worker-4
       WORKER_PORT: "9100"
       WORKER_ADVERTISE_HOST: worker-4
-      OLLAMA_BASE_URL: https://j28llglf-11434.thundercompute.net
+      OLLAMA_BASE_URL: https://q1miw9kq-11434.thundercompute.net
       OLLAMA_SSL_VERIFY: "false"
       WORKER_MAX_CONCURRENCY: "4"
     depends_on:
@@ -205,7 +211,7 @@ services:
       WORKER_ID: worker-5
       WORKER_PORT: "9100"
       WORKER_ADVERTISE_HOST: worker-5
-      OLLAMA_BASE_URL: https://j28llglf-11434.thundercompute.net
+      OLLAMA_BASE_URL: https://q1miw9kq-11434.thundercompute.net
       OLLAMA_SSL_VERIFY: "false"
       WORKER_MAX_CONCURRENCY: "4"
     depends_on:

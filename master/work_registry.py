@@ -12,10 +12,10 @@ class WorkerRegistry:
         self._workers: Dict[str, WorkerInfo] = {}
 
     # node entry 
-    def register(self, worker_id: str, host: str, port: int) -> WorkerInfo:
-        worker = WorkerInfo(worker_id=worker_id, host=host, port=port)
+    def register(self, worker_id: str, host: str, port: int, priority_weight: float = 1.0) -> WorkerInfo:
+        worker = WorkerInfo(worker_id=worker_id, host=host, port=port, priority_weight=priority_weight)
         self._workers[worker_id] = worker
-        log.info("Worker registered: %s @ %s:%d", worker_id, host, port)
+        log.info("Worker registered: %s @ %s:%d (weight=%.1f)", worker_id, host, port, priority_weight)
         return worker
     
     # node exiting
@@ -43,14 +43,14 @@ class WorkerRegistry:
     def get_healthy_workers(self) -> List[WorkerInfo]:
         return [w for w in self._workers.values() if w.healthy]
 
-    # find the worker with the lowest load and fewest active tasks
+    # find the worker with the lowest weighted load and fewest active tasks
     def get_best_worker(self) -> Optional[WorkerInfo]:
-
-        # return the healthy worker with the lowest combined load score
         healthy = self.get_healthy_workers()
         if not healthy:
             return None
-        return min(healthy, key=lambda w: (w.load, w.active_tasks))
+        # dividing load by priority_weight means higher-weight workers appear
+        # less loaded and are selected more often
+        return min(healthy, key=lambda w: (w.load / w.priority_weight, w.active_tasks))
 
     def get_all(self) -> List[WorkerInfo]:
         return list(self._workers.values())

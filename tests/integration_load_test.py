@@ -10,6 +10,8 @@ import aiohttp
 import argparse
 import time
 import random
+import datetime
+import os
 
 PROMPTS = [
     "What is replication in distributed systems?",
@@ -168,8 +170,97 @@ async def main() -> None:
     print(f"{'='*65}")
     if n > 0:
         est_1000_min = (1000 / NUM_REQUESTS) * wall_time / 60
-        print(f"\n  Extrapolated for 1000 requests : ~{est_1000_min:.1f} min")
+        print(f"\n  Estimated time for 1000 requests : ~{est_1000_min:.1f} min")
     print(f"{'='*65}\n")
+
+    _write_results_log(NUM_REQUESTS, MAX_CONCURRENCY, TIMEOUT_S,
+                       counters, wall_time, latencies, pct, est_1000_min if n > 0 else None)
+
+
+def _write_results_log(num_req, concurrency, timeout_s, counters, wall_time, latencies, pct, est_1000_min):
+    import json
+    tests_dir  = os.path.dirname(__file__)
+    results_dir = os.path.join(tests_dir, "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    n = len(latencies)
+    timestamp     = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp_fn  = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+    throughput    = num_req / wall_time
+    success_rate  = 100 * counters["success"] / num_req
+
+    lines = [
+        f"\n{'='*65}",
+        f"  Run timestamp       : {timestamp}",
+        f"  Total requests      : {num_req}",
+        f"  Concurrency         : {concurrency}",
+        f"  Timeout             : {timeout_s}s",
+        f"{'='*65}",
+        f"  Successful          : {counters['success']}",
+        f"  Failed              : {counters['failed']}",
+        f"  Success rate        : {success_rate:.1f}%",
+        f"  Wall-clock time     : {wall_time:.1f}s  ({wall_time / 60:.1f} min)",
+        f"  Throughput          : {throughput:.3f} req/s",
+    ]
+    if n > 0:
+        avg = sum(latencies) / n
+        lines += [
+            f"  Avg latency         : {avg:.1f}s",
+            f"  P50 latency         : {pct(0.50):.1f}s",
+            f"  P95 latency         : {pct(0.95):.1f}s",
+            f"  P99 latency         : {pct(0.99):.1f}s",
+            f"  Min latency         : {latencies[0]:.1f}s",
+            f"  Max latency         : {latencies[-1]:.1f}s",
+        ]
+    lines.append(f"{'='*65}")
+    lines.append(f"  Requests per worker :")
+    for worker, count in sorted(counters["workers"].items(), key=lambda x: -x[1]):
+        lines.append(f"    {worker:12s} : {count:4d}")
+    if est_1000_min is not None:
+        lines.append(f"\n  Estimated time for 1000 requests : ~{est_1000_min:.1f} min")
+    lines.append(f"{'='*65}\n")
+    content = "\n".join(lines) + "\n"
+
+    # 1. Cumulative log (all runs appended)
+    cumulative_path = os.path.join(tests_dir, "load_test_results.log")
+    with open(cumulative_path, "a", encoding="utf-8") as f:
+        f.write(content)
+
+    # 2. Individual run file (for screenshots)
+    individual_path = os.path.join(results_dir, f"load_test_{num_req}req_{timestamp_fn}.txt")
+    with open(individual_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # 3. Graph data JSON (accumulates key metrics across runs)
+    graph_path = os.path.join(results_dir, "graph_data.json")
+    graph_data = []
+    if os.path.exists(graph_path):
+        with open(graph_path, "r", encoding="utf-8") as f:
+            try:
+                graph_data = json.load(f)
+            except Exception:
+                graph_data = []
+    graph_data.append({
+        "timestamp":    timestamp,
+        "num_requests": num_req,
+        "concurrency":  concurrency,
+        "success_rate": round(success_rate, 1),
+        "throughput":   round(throughput, 3),
+        "wall_time_s":  round(wall_time, 1),
+        "p50_s":        round(pct(0.50), 1) if n > 0 else None,
+        "p95_s":        round(pct(0.95), 1) if n > 0 else None,
+        "p99_s":        round(pct(0.99), 1) if n > 0 else None,
+        "min_s":        round(latencies[0], 1) if n > 0 else None,
+        "max_s":        round(latencies[-1], 1) if n > 0 else None,
+        "avg_s":        round(sum(latencies)/n, 1) if n > 0 else None,
+        "workers":      dict(sorted(counters["workers"].items(), key=lambda x: -x[1])),
+    })
+    with open(graph_path, "w", encoding="utf-8") as f:
+        json.dump(graph_data, f, indent=2)
+
+    print(f"  Cumulative log : {cumulative_path}")
+    print(f"  This run log   : {individual_path}")
+    print(f"  Graph data     : {graph_path}")
 
 
 if __name__ == "__main__":

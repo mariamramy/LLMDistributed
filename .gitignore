@@ -10,3 +10,11 @@ htmlcov/
 chroma-data/
 pdfs/
 *.log
+start.ps1
+load_test_results.log
+results/
+tests/charts/
+tests/results/
+.claude/
+~$*.docx
+

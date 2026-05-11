@@ -48,6 +48,7 @@ class WorkerInfo:
     active_tasks: int   = 0
     total_tasks: int    = 0
     last_heartbeat: float = field(default_factory=time.time)
+    priority_weight: float = 1.0  # higher = more traffic routed here
 
     @property
     def url(self) -> str:

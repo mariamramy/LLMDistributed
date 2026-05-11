@@ -38,6 +38,9 @@ class WorkerConfig:
     embedding_model: str
     max_output_tokens: int
     ollama_ssl_verify: bool = True
+    stub_mode: bool = False
+    stub_delay_ms: float = 50.0
+    priority_weight: float = 1.0
 
     @classmethod
     def from_env(cls) -> "WorkerConfig":
@@ -57,6 +60,9 @@ class WorkerConfig:
                 os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
             ),
             ollama_ssl_verify=os.getenv("OLLAMA_SSL_VERIFY", "true").lower() != "false",
+            stub_mode=os.getenv("STUB_MODE", "false").lower() == "true",
+            stub_delay_ms=float(os.getenv("STUB_DELAY_MS", "50")),
+            priority_weight=float(os.getenv("WORKER_PRIORITY_WEIGHT", "1.0")),
         )
 
 
@@ -185,6 +191,16 @@ class GPUWorker:
         }
 
     async def handle_health(self, request: web.Request) -> web.Response:
+        if self.config.stub_mode:
+            return web.json_response({
+                "worker_id": self.config.worker_id,
+                "status": "ok",
+                "stub_mode": True,
+                "llm_ready": True,
+                "rag_ready": True,
+                "active_tasks": self.metrics.active_tasks,
+                "load": self.load,
+            })
         readiness = await self.readiness()
         status = 200 if readiness["status"] == "ok" else 503
         return web.json_response(readiness, status=status)
@@ -229,14 +245,14 @@ class GPUWorker:
             return self._task_error(task_id, "missing_task_id", "task_id is required", status=400)
         if not prompt:
             return self._task_error(task_id, "missing_prompt", "prompt is required", status=400)
-        if not await self.llm_ready():
+        if not self.config.stub_mode and not await self.llm_ready():
             return self._task_error(
                 task_id,
                 "ollama_not_ready",
                 "Ollama is not reachable or required models are not installed",
                 status=503,
             )
-        if use_rag and not await self.chroma_ready():
+        if not self.config.stub_mode and use_rag and not await self.chroma_ready():
             return self._task_error(
                 task_id,
                 "rag_not_ready",
@@ -249,6 +265,22 @@ class GPUWorker:
             self.metrics.total_tasks += 1
             started = time.perf_counter()
             try:
+                if self.config.stub_mode:
+                    await asyncio.sleep(self.config.stub_delay_ms / 1000)
+                    latency_ms = (time.perf_counter() - started) * 1000
+                    self.metrics.completed_tasks += 1
+                    self.metrics.total_latency_ms += latency_ms
+                    return web.json_response({
+                        "task_id": task_id,
+                        "request_id": request_id,
+                        "status": "completed",
+                        "worker_id": self.config.worker_id,
+                        "result": f"[STUB] {prompt[:60]}",
+                        "latency_ms": round(latency_ms, 2),
+                        "rag": {"used": False, "sources": []},
+                        "llm": {"model": "stub", "usage": {}},
+                    })
+
                 sources: List[SourceSnippet] = []
                 if use_rag:
                     retrieval = await self.retriever.retrieve(prompt)
@@ -318,9 +350,10 @@ class GPUWorker:
             log.info("MASTER_URL not set; skipping worker registration")
             return
         payload = {
-            "worker_id": self.config.worker_id,
-            "host": self.config.advertise_host,
-            "port": self.config.port,
+            "worker_id":       self.config.worker_id,
+            "host":            self.config.advertise_host,
+            "port":            self.config.port,
+            "priority_weight": self.config.priority_weight,
         }
         # CHANGED: retry up to 10 times with 3 second delay
         for attempt in range(10):
