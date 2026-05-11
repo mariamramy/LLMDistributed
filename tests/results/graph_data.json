@@ -1,0 +1,99 @@
+[
+  {
+    "timestamp": "2026-05-11 19:05:34",
+    "num_requests": 100,
+    "concurrency": 20,
+    "success_rate": 100.0,
+    "throughput": 0.693,
+    "wall_time_s": 144.3,
+    "p50_s": 65.4,
+    "p95_s": 128.6,
+    "p99_s": 144.3,
+    "min_s": 7.9,
+    "max_s": 144.3,
+    "avg_s": 66.3,
+    "workers": {
+      "worker-3": 36,
+      "worker-2": 33,
+      "worker-1": 31
+    }
+  },
+  {
+    "timestamp": "2026-05-11 19:20:30",
+    "num_requests": 500,
+    "concurrency": 20,
+    "success_rate": 100.0,
+    "throughput": 0.828,
+    "wall_time_s": 604.2,
+    "p50_s": 294.8,
+    "p95_s": 555.2,
+    "p99_s": 590.8,
+    "min_s": 4.4,
+    "max_s": 604.2,
+    "avg_s": 292.6,
+    "workers": {
+      "worker-3": 174,
+      "worker-2": 164,
+      "worker-1": 162
+    }
+  },
+  {
+    "timestamp": "2026-05-11 19:43:45",
+    "num_requests": 1000,
+    "concurrency": 20,
+    "success_rate": 100.0,
+    "throughput": 1.369,
+    "wall_time_s": 730.4,
+    "p50_s": 374.3,
+    "p95_s": 693.7,
+    "p99_s": 720.6,
+    "min_s": 7.8,
+    "max_s": 730.4,
+    "avg_s": 373.7,
+    "workers": {
+      "worker-4": 275,
+      "worker-5": 268,
+      "worker-3": 153,
+      "worker-1": 152,
+      "worker-2": 152
+    }
+  },
+  {
+    "timestamp": "2026-05-11 20:02:52",
+    "num_requests": 100,
+    "concurrency": 20,
+    "success_rate": 100.0,
+    "throughput": 0.265,
+    "wall_time_s": 377.2,
+    "p50_s": 96.5,
+    "p95_s": 353.8,
+    "p99_s": 377.2,
+    "min_s": 12.0,
+    "max_s": 377.2,
+    "avg_s": 117.8,
+    "workers": {
+      "worker-2": 37,
+      "worker-1": 34,
+      "worker-3": 29
+    }
+  },
+  {
+    "timestamp": "2026-05-11 21:24:03",
+    "num_requests": 100,
+    "concurrency": 20,
+    "success_rate": 30.0,
+    "throughput": 1.95,
+    "wall_time_s": 51.3,
+    "p50_s": 26.1,
+    "p95_s": 49.3,
+    "p99_s": 51.3,
+    "min_s": 8.0,
+    "max_s": 51.3,
+    "avg_s": 26.0,
+    "workers": {
+      "worker-2": 12,
+      "worker-1": 10,
+      "worker-3": 8
+    }
+  }
+]

@@ -9,12 +9,12 @@ htmlcov/
 .coverage
 chroma-data/
 pdfs/
-*.log
+.DS_Store
 start.ps1
-load_test_results.log
-results/
-tests/charts/
-tests/results/
 .claude/
 ~$*.docx
+doc.md
+load_test_results.log
+tests/*.log
+CSE 354 Project S26.pdf
 

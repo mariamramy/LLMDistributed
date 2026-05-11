@@ -167,7 +167,7 @@ async def main() -> None:
 
 
 def _write_log(args, counters, wall_time, latencies, pct, n):
-    log_path = os.path.join(os.path.dirname(__file__), "stub_load_test_results.log")
+    log_path = os.path.join(os.path.dirname(__file__), "results", "stub_load_test_results.log")
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines = [
         f"\n{'='*65}",

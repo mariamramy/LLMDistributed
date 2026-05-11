@@ -1,0 +1,27 @@
+
+=================================================================
+  Run timestamp       : 2026-05-11 19:05:34
+  Total requests      : 100
+  Concurrency         : 20
+  Timeout             : 300s
+=================================================================
+  Successful          : 100
+  Failed              : 0
+  Success rate        : 100.0%
+  Wall-clock time     : 144.3s  (2.4 min)
+  Throughput          : 0.693 req/s
+  Avg latency         : 66.3s
+  P50 latency         : 65.4s
+  P95 latency         : 128.6s
+  P99 latency         : 144.3s
+  Min latency         : 7.9s
+  Max latency         : 144.3s
+=================================================================
+  Requests per worker :
+    worker-3     :   36
+    worker-2     :   33
+    worker-1     :   31
+
+  Estimated time for 1000 requests : ~24.0 min
+=================================================================
+

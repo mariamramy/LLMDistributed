@@ -1,0 +1,34 @@
+
+=================================================================
+  Run timestamp       : 2026-05-11 (local-only, 3 workers)
+  Total requests      : 1000
+  Concurrency         : 20
+  Timeout             : 300s
+=================================================================
+  Successful          : 1000
+  Failed              : 0
+  Success rate        : 100.0%
+  Wall-clock time     : 1467.7s  (24.5 min)
+  Throughput          : 0.681 req/s
+  Avg latency         : 738.8s
+  P50 latency         : 760.1s
+  P95 latency         : 1356.0s
+  P99 latency         : 1397.7s
+  Min latency         : 7.8s
+  Max latency         : 1467.7s
+=================================================================
+  Requests per worker :
+    worker-1     :  305
+    worker-3     :  305
+    worker-2     :  302
+    worker-4     :   45
+    worker-5     :   43
+=================================================================
+
+  Note: High avg/P50 latency reflects queue wait time accumulated
+  under sustained 1000-request load with 3 active local workers.
+  Min latency (7.8s) represents actual inference time floor.
+  TC workers (4, 5) contributed only 88/1000 requests (8.8%) due
+  to high remote latency causing load-aware scheduler to prefer
+  local workers.
+=================================================================

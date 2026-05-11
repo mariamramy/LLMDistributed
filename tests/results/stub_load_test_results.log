@@ -1,0 +1,61 @@
+
+=================================================================
+  Timestamp           : 2026-05-11 17:55:40
+  Mode                : STUB (no LLM inference)
+  Total requests      : 1000
+  Concurrency         : 50
+  Successful          : 956
+  Failed              : 44
+  Success rate        : 95.6%
+  Wall-clock time     : 35.46s
+  Throughput          : 28.2 req/s
+  P50 latency         : 246.8ms
+  P95 latency         : 8393.7ms
+  P99 latency         : 30643.3ms
+  Requests per worker :
+    worker-2     :  362
+    worker-3     :  348
+    worker-1     :  246
+  Note: concurrency 50 exceeds worker slot capacity (3x2=6); failures expected
+=================================================================
+
+
+=================================================================
+  Timestamp           : 2026-05-11 18:13:19
+  Mode                : STUB (no LLM inference)
+  Total requests      : 1000
+  Concurrency         : 10
+  Successful          : 262
+  Failed              : 738
+  Success rate        : 26.2%
+  Wall-clock time     : 904.10s
+  Throughput          : 1.1 req/s
+  P50 latency         : 18573.6ms
+  P95 latency         : 63966.3ms
+  P99 latency         : 174636.1ms
+  Requests per worker :
+    worker-1     :   94
+    worker-2     :   84
+    worker-3     :   84
+  Note: workers were being rebuilt during this run (anomalous)
+=================================================================
+
+
+=================================================================
+  Timestamp           : 2026-05-11 20:42:30  [BEST RUN — stable stub mode]
+  Mode                : STUB (no LLM inference)
+  Total requests      : 1000
+  Concurrency         : 10
+  Successful          : 994
+  Failed              : 6
+  Success rate        : 99.4%
+  Wall-clock time     : 46.59s
+  Throughput          : 21.5 req/s
+  P50 latency         : 101.3ms
+  P95 latency         : 147.4ms
+  P99 latency         : 172.1ms
+  Requests per worker :
+    worker-1     :  483
+    worker-2     :  345
+    worker-3     :  166
+=================================================================

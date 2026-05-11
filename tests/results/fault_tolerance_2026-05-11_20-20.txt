@@ -1,0 +1,21 @@
+=======================================================
+  FAULT TOLERANCE TEST
+=======================================================
+  Timestamp           : 2026-05-11 20:20:02
+  Worker killed       : worker-1 at t=30.0s
+  Total requests      : 50
+  Successful          : 50
+  Failed              : 0
+  Success rate        : 100.0%
+  Outage window       : t=30s until Docker auto-restart
+=======================================================
+  Requests per worker :
+    worker-2     :  23
+    worker-1     :  20  <- KILLED
+    worker-3     :   6
+    worker-5     :   1
+=======================================================
+  Before kill — worker-1: 5 requests
+  After kill  — worker-1: 15 requests (post-restart)
+  Chart saved : C:\final projects\sem 8\distributed\LLMDistributed\tests\charts\fault_tolerance_timeline.png
+=======================================================

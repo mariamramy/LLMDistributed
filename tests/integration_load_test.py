@@ -240,7 +240,7 @@ def _write_results_log(num_req, concurrency, timeout_s, counters, wall_time, lat
     content = "\n".join(lines) + "\n"
 
     # 1. Cumulative log (all runs appended)
-    cumulative_path = os.path.join(tests_dir, "load_test_results.log")
+    cumulative_path = os.path.join(results_dir, "load_test_results.log")
     with open(cumulative_path, "a", encoding="utf-8") as f:
         f.write(content)
 

@@ -1,0 +1,17 @@
+===========================================================================
+  GPU Monitor Log
+  GPU        : NVIDIA GeForce RTX 4050 Laptop GPU
+  Started    : 2026-05-11 21:23:13
+  Interval   : 5s
+===========================================================================
+
+  21:23:13  |  VRAM: 0 / 6141 MiB  (5921 MiB free)  |  Temp: 46°C  |  Power: 12.08W  |  GPU util: 0%
+  21:23:18  |  VRAM: 2572 / 6141 MiB  (3350 MiB free)  |  Temp: 56°C  |  Power: 25.96W  |  GPU util: 82%
+  21:23:23  |  VRAM: 2572 / 6141 MiB  (3350 MiB free)  |  Temp: 62°C  |  Power: 57.42W  |  GPU util: 83%
+  21:23:28  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 65°C  |  Power: 61.32W  |  GPU util: 89%
+  21:23:34  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 67°C  |  Power: 57.60W  |  GPU util: 82%
+  21:23:39  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 71°C  |  Power: 67.96W  |  GPU util: 86%
+  21:23:44  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 70°C  |  Power: 54.80W  |  GPU util: 91%
+  21:23:49  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 75°C  |  Power: 65.32W  |  GPU util: 91%
+  21:23:54  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 64°C  |  Power: 20.76W  |  GPU util: 0%
+  21:23:59  |  VRAM: 2574 / 6141 MiB  (3348 MiB free)  |  Temp: 60°C  |  Power: 5.56W  |  GPU util: 0%
